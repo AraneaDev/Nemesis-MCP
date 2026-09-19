@@ -168,6 +168,9 @@ export interface AuditSummary {
   scanned_test_files: number;
   doubles_inspected: number;
   violations_count: number;
+  doubles_checked?: number;
+  doubles_unresolved?: number;
+  doubles_unknowable?: number;
   skipped_languages?: LanguageId[];
   diagnostics?: ScanDiagnostic[];
   partial?: boolean;
@@ -183,4 +186,22 @@ export interface AnalyzeOptions {
   languages: LanguageId[];
   /** Callback for stderr-style notices (grammar load failures etc.). */
   notice?: (message: string) => void;
+}
+
+/**
+ * What the analyzer actually reached, counted per double.
+ *
+ * `doubles_inspected` used to be the only number in the summary, and it
+ * counts doubles found rather than doubles compared. On one repository in
+ * the corpus it read 4,772 when 47 had been compared against anything.
+ */
+export interface AnalyzeStats {
+  /** Target resolved and at least one member was looked up. */
+  checked: number;
+  /** Target named something this scan could not find. */
+  unresolved: number;
+  /** A built-in or a package: there is no contract to check, and never was. */
+  unknowable: number;
+  /** The extractor found a double but could not name what it stands for. */
+  noTarget: number;
 }
