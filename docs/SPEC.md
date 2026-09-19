@@ -135,6 +135,14 @@ is listed in `unparsable_fixtures`. Neither makes the scan partial.
    or `Promise<T>` is satisfied by any of its members. Confidence drops to
    `warning` when both sides name concrete types, because the inheritance that
    would relate them lives in a dependency directory that is never walked.
+
+   When the stub returns an object literal and the declared type's fields are
+   known, the fields are compared as well: a missing required field is
+   `definite`, an unknown field is a `warning` with a did-you-mean. The check
+   stands down when the literal spreads another value or uses a computed key,
+   since the key set is then unknowable, and when the declared type inherits
+   from outside the scanned tree, since it may declare more fields than are
+   visible. A member the type declares as a property is never a ghost method.
 4. **`VISIBILITY_BREACH`** — the double stubs a `private`/`protected` method
    directly, bypassing the public interface. Python has no access control, so
    a single leading underscore yields `warning`; only a name-mangled

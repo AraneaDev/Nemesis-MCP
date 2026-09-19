@@ -19,7 +19,7 @@ classes/interfaces/traits. No tests are executed; results are deterministic.
 | --- | --- |
 | `GHOST_METHOD` | The double stubs a method that no longer exists on the target (includes "Did you mean …?" suggestions). |
 | `ARITY_MISMATCH` | The double passes more arguments than the method accepts, or omits required ones. |
-| `RETURN_DRIFT` | The stubbed return value cannot satisfy the declared return type. |
+| `RETURN_DRIFT` | The stubbed return value cannot satisfy the declared return type, including an object literal missing a required field of the declared type or carrying one that no longer exists. |
 | `VISIBILITY_BREACH` | The double stubs a `private`/`protected` method directly. |
 
 Findings carry a confidence: `definite` (block-worthy) or `warning`
@@ -38,10 +38,10 @@ entirely.
 
 | Language | Frameworks | Patterns |
 | --- | --- | --- |
-| TypeScript / JS | Vitest, Jest | `vi.spyOn` / `jest.spyOn`, `mockReturnValue`, `mockResolvedValue`, `toHaveBeenCalledWith`, `toHaveBeenCalledTimes` |
+| TypeScript / JS | Vitest, Jest | `vi.spyOn` / `jest.spyOn`, `vi.mocked` / `jest.mocked`, `mockReturnValue`, `mockResolvedValue`, `toHaveBeenCalledWith`, `toHaveBeenCalledTimes`, and the same setters and assertions applied directly to a typed receiver |
 | PHP | PHPUnit, Pest, Mockery | `createMock`, `createStub`, `getMockBuilder()->getMock()`, `expects()->method()`, `with()`, `willReturn*`, `Mockery::mock`, `shouldReceive`, `andReturn*`, Pest `mock()` / `spy()` |
 | Python | pytest-mock, unittest.mock | `mocker.patch`, `patch`, `patch.object`, `create_autospec`, `Mock(spec=X)`, `return_value=`, `assert_called_with` |
-| Rust | mockall | `MockFoo::new()` / `MockFoo::default()` with `expect_<method>()`, arity from `.with(...)`, plus `#[automock]` and `mock! { }` declarations |
+| Rust | mockall | `MockFoo::new()` / `MockFoo::default()` with `expect_<method>()`, arity from `.with(...)`, return values from `return_const(...)` and `returning(|| ...)`, plus `#[automock]` and `mock! { }` declarations |
 
 ## Install & Run
 
