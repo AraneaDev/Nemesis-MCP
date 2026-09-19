@@ -1,7 +1,7 @@
 # Dogfood run: issues found in other repositories
 
 Date: 2026-09-19
-Scope: every git repository under `/root` (53 checkouts), audited with
+Scope: every git repository under `/root` (54 checkouts), audited with
 `nemesis audit --json` at default strictness.
 
 This file records what the run said about **other** codebases. The defects it
@@ -29,6 +29,8 @@ so the rest of this file is about what the sweep revealed.
 | Same class name across several languages | usage-tracker |
 | Doubles that no static tool can verify | Chaos-MCP, Knossos-MCP, topolearn, glyphfall, reefermanseeds, proxypilot |
 | Cannot self-audit without `--exclude` | Momus-MCP |
+| Deliberately unparsable data under `tests/` | nekyia, oogactx, Argos-MCP, Knossos-MCP, mcpobservatory |
+| Test corpus of miniature projects | mcpobservatory |
 
 ## 1. Oversized generated files in the working tree
 
@@ -141,13 +143,16 @@ literal `shouldReceive('getUnreadCount')` calls restores static checkability.
 right tool for injecting a fake `get_db`. It is invisible to class-contract
 checking, because the target is a module attribute rather than a method.
 
-**Tests against protected internals.** `proxypilot`'s
-`backend/tests/unit/core/security_scanners/test_posture.py` patches 22
-`_check_*` methods of `PostureEvaluator` in a single test setup. Python has no
-access control and this is a common pattern, so Nemesis now reports it as a
-warning rather than a breach. It is still worth a look: a test that stubs 22
-internal methods is asserting against the shape of the implementation, and will
-need rewriting whenever that shape changes.
+**Tests against protected internals.** proxypilot stubs 22 underscore-prefixed
+methods across two files: 15 `_check_*` methods of `PostureEvaluator` in
+`backend/tests/unit/core/security_scanners/test_posture.py`, and 7
+`_send_webhook*` methods of `WebhookManager` in
+`backend/tests/unit/core/test_webhook_manager.py`. Python has no access
+control and this is a common pattern, so Nemesis now reports it as a warning
+rather than a breach, which is why the default run is clean. It is still worth
+a look: a test setup that stubs fifteen internal methods of one class is
+asserting against the shape of the implementation, and will need rewriting
+whenever that shape changes.
 
 ## 6. Repositories that cannot audit themselves
 
@@ -171,14 +176,22 @@ and a great deal wrong with the command, which is recorded in the commit
 rather than here. Two observations about the repositories are worth keeping.
 
 **Deliberately broken data is everywhere, and that is correct.** Fixture
-directories legitimately contain files that will never parse: nekyia keeps a
-truncated `meta.json` to exercise its recovery path, mcpobservatory keeps a
-`.cursor/mcp.json` carrying a Unicode right-to-left override as a security
-corpus case, oogactx keeps a `playwright-console.json` that is actually
-Markdown, and several repositories keep a `tsconfig.json` with comments, which
-is valid JSONC and invalid JSON. Any tool that treats an unparsable file under
-`tests/` as its own failure will fail in most of these repositories. It is data
-the tests own, not input the tool is entitled to.
+directories legitimately contain files that will never parse:
+
+| Repository | File | Why it does not parse |
+| --- | --- | --- |
+| nekyia | `test/fixtures/cursor/chats/.../meta.json` | Truncated on purpose, to exercise the recovery path. |
+| oogactx | `tests/fixtures/playwright-console.json` | Contains Markdown, not JSON. |
+| mcpobservatory | `tests/analysis/corpus/.../.cursor/mcp.json` | Carries a Unicode right-to-left override, as a security corpus case. |
+| Argos-MCP | `tests/tsconfig.json` | JSONC: valid TypeScript config, invalid JSON. |
+| Knossos-MCP | `tests/Fixtures/mixed/frontend/tsconfig.json` | Same. |
+
+Any tool that treats an unparsable file under `tests/` as its own failure will
+fail in most of these repositories. It is data the tests own, not input the
+tool is entitled to. Nemesis now reaches the first three, names them in
+`unparsable_fixtures` and does not call the scan partial; the two `tsconfig`
+files it never opens, because a TypeScript config is not a fixture wherever it
+sits.
 
 **Test corpora look like projects.** mcpobservatory's
 `tests/analysis/corpus/cases/` holds dozens of miniature packages, each with
@@ -191,14 +204,15 @@ is there before pointing a new linter at that repository.
 
 Each repository was audited from its root with `nemesis audit --json` at default
 strictness (`breaking_only`), with a 300 s timeout, both before and after the
-tool fixes landed. Totals across the 53 checkouts:
+tool fixes landed. Timings are wall clock from a sequential sweep on one
+machine and are good to a few percent, not better. Totals across the 54 checkouts:
 
 | | Before | After |
 | --- | --- | --- |
 | Violations reported | 139 | 32 |
 | Repositories exiting 0 | 45 | 51 |
 | Repositories exiting 2 (operational) | 3 | 1 |
-| Total wall time | 150.9 s | 52.1 s |
+| Total wall time | ~151 s | ~55 s |
 
 All 32 remaining findings are the deliberate fixtures in Nemesis (20) and
 Momus-MCP (12). The drop from 139 is false positives removed, not detection
@@ -214,7 +228,7 @@ A second cycle repeated the sweep for `nemesis fixtures`:
 | Repositories exiting 0 | 0 | 52 |
 | Repositories exiting 2 | 52 | 1 |
 | Timeouts and crashes | 2 | 0 |
-| Total wall time | 371.2 s | 33.5 s |
+| Total wall time | ~371 s | ~34 s |
 
 The two surviving findings are the intentionally stale fixture in this
 repository. The single exit 2 is workflow-dockerized, for the reason in
