@@ -23,9 +23,12 @@ coverage/
 # local docs (private notes)
 docs/superpowers/
 
-# tool caches
+# tool caches and per-project state written by MCP servers
 /.momus/
 /.superpowers/
+/.knossos/
+/.chaos-mcp/
+/.nemesis/
 
 # audit and dogfood reports (working notes, not shipped docs)
 /docs/audits/
