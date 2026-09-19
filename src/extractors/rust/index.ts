@@ -87,7 +87,9 @@ export async function indexRustFile(
         kind: 'trait',
         methods: new Map(),
         unknownMembers: new Set(),
-        extends: [],
+        // `trait Derived: Base` inherits Base's members. Leaving this empty
+        // reported every inherited method as missing from the subtrait.
+        extends: supertraitNames(node),
         implements: [],
         uses: [],
         line: node.startPosition.row + 1,
@@ -151,3 +153,36 @@ export async function indexRustFile(
     }
   }
 }
+
+/** Supertrait names from `trait Derived: Base + Send`, generics stripped. */
+function supertraitNames(traitNode: SyntaxNode): string[] {
+  const bounds = field(traitNode, 'bounds');
+  if (!bounds) return [];
+  const names: string[] = [];
+  for (const child of bounds.namedChildren) {
+    if (child.type === 'lifetime') continue;
+    const text = child.text.trim();
+    // `Base<T>` and `path::Base` both contribute the bare trait name.
+    const match = /([A-Za-z_]\w*)\s*(<.*>)?$/.exec(text.split('<')[0] ?? text);
+    const bare = match?.[1];
+    if (bare && !AUTO_TRAITS.has(bare)) names.push(bare);
+  }
+  return names;
+}
+
+/** Marker traits that carry no members, so following them is pointless. */
+const AUTO_TRAITS = new Set([
+  'Send',
+  'Sync',
+  'Sized',
+  'Unpin',
+  'Copy',
+  'Clone',
+  'Debug',
+  'Default',
+  'Eq',
+  'PartialEq',
+  'Ord',
+  'PartialOrd',
+  'Hash',
+]);

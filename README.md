@@ -184,8 +184,14 @@ extension is production code. `node_modules`, `vendor`, `dist`, `build`,
 Symlinked directories are followed, because a repository that reaches its
 source through a link (pnpm workspaces, many monorepo layouts) would otherwise
 have that source missing from the graph and every double pointing into it
-silently unchecked. A symlink that loops back up the tree ends the descent
-rather than the process.
+silently unchecked. Directories are tracked by real path, so a link back to
+somewhere already walked, including the repository root, ends the descent
+instead of walking the tree twice.
+
+Rust is discovered differently from the rest: `tests/` and `benches/` are
+Cargo's test targets, `*_test.rs` and `test_*.rs` are tests by name, and a
+source file carrying a `#[cfg(test)]` module is scanned as both production and
+test, because that inline module is where most Rust unit tests live.
 
 The repository's own `.gitignore` is honoured as well, so generated trees
 (`var/cache/`, `build-electrobun/`, a linked `.worktrees/` checkout, a vendored

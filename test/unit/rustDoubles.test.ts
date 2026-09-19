@@ -84,3 +84,60 @@ describe('mockall usage extraction', () => {
     expect(found.map((d) => d.framework)).toContain('mockall #[automock]');
   });
 });
+
+describe('rust test discovery', () => {
+  it('treats Cargo test targets as tests', async () => {
+    const { isTestFile } = await import('../../src/core/discovery.js');
+    expect(isTestFile('tests/storage_mock.rs')).toBe(true);
+    expect(isTestFile('benches/bench.rs')).toBe(true);
+  });
+
+  it('treats _test.rs and test_ names as tests', async () => {
+    const { isTestFile } = await import('../../src/core/discovery.js');
+    expect(isTestFile('packages/p/test/fixtures/drift_test.rs')).toBe(true);
+    expect(isTestFile('src/test_parser.rs')).toBe(true);
+  });
+
+  it('does not treat a singular test/ directory as a Cargo test target', async () => {
+    // `test/fixtures/repo.rs` is the trait a fixture is written against.
+    // Classifying it as a test kept it out of the symbol graph, and the drift
+    // in the file beside it went unreported.
+    const { isTestFile } = await import('../../src/core/discovery.js');
+    expect(isTestFile('packages/p/test/fixtures/repo.rs')).toBe(false);
+    expect(isTestFile('src/lib.rs')).toBe(false);
+  });
+});
+
+describe('supertraits', () => {
+  it('inherits members from a supertrait', async () => {
+    const { indexRustFile } = await import('../../src/extractors/rust/index.js');
+    const { emptyGraph, resolveType, resolveMember } =
+      await import('../../src/core/symbolGraph.js');
+    const graph = emptyGraph();
+    await indexRustFile(
+      'src/traits.rs',
+      `pub trait Base { fn add(&self, x: i32) -> usize; }
+       pub trait Derived : Base { fn sub(&self, x: i32) -> usize; }`,
+      graph,
+    );
+    const derived = resolveType(graph, 'Derived', { language: 'rust' });
+    expect(derived).not.toBeNull();
+    expect(derived?.extends).toContain('Base');
+    // `add` is inherited, not missing.
+    expect(resolveMember(graph, derived!, 'add')).not.toBeNull();
+    expect(resolveMember(graph, derived!, 'nope')).toBeNull();
+  });
+
+  it('ignores marker traits in the bound list', async () => {
+    const { indexRustFile } = await import('../../src/extractors/rust/index.js');
+    const { emptyGraph, resolveType } = await import('../../src/core/symbolGraph.js');
+    const graph = emptyGraph();
+    await indexRustFile(
+      'src/traits.rs',
+      `pub trait Base { fn add(&self); }
+       pub trait Multi: Base + Send + Sync + Clone { fn z(&self); }`,
+      graph,
+    );
+    expect(resolveType(graph, 'Multi', { language: 'rust' })?.extends).toEqual(['Base']);
+  });
+});

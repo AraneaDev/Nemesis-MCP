@@ -31,6 +31,8 @@ so the rest of this file is about what the sweep revealed.
 | Cannot self-audit without `--exclude` | Momus-MCP |
 | Deliberately unparsable data under `tests/` | nekyia, oogactx, Argos-MCP, Knossos-MCP, mcpobservatory |
 | Test corpus of miniature projects | mcpobservatory |
+| Rust present, mockall used only in Momus-MCP's fixtures | Knossos-MCP, Chaos-MCP, expensis, glyphfall, 3d-wasm, talos, proxypilot, Momus-MCP, ratio, Sneaky-MCP, termaxa |
+| Repository root reachable through its own symlink | oogactx |
 
 ## 1. Oversized generated files in the working tree
 
@@ -200,6 +202,43 @@ both give the wrong answer. A corpus of fake projects is one of the harder
 shapes for any repository-walking tool to classify, and it is worth knowing it
 is there before pointing a new linter at that repository.
 
+## 8. What the third cycle added
+
+The third cycle targeted the surfaces the first two never touched:
+`verify-symbol`, the Rust tier, and the shape of the filesystem itself.
+
+**Momus-MCP's fixtures found a bug in Nemesis.** Momus keeps a Rust drift
+corpus under `packages/parser-rust/test/fixtures/drift/`, written against
+mockall and annotated with what each case must and must not report.
+`supertrait_test.rs` carries a comment saying that a mock of
+`trait Derived : Base` stubbing the inherited `add` must not be flagged.
+Nemesis flagged it, because the Rust indexer never read supertrait bounds.
+`drift_test.rs` plants a `save2` method that does not exist on `Repo`, which
+Nemesis now reports. Pointing the two tools at each other was worth more than
+any amount of scanning application code, and it is the cheapest review
+available: a peer tool's fixtures are a specification someone else wrote down.
+
+**Rust is a minority language here, and it hid a dead feature.** Twelve
+checkouts contain Rust (Knossos-MCP, Chaos-MCP, expensis, glyphfall, 3d-wasm,
+talos, proxypilot, Momus-MCP, ratio, Sneaky-MCP, termaxa and this one).
+Momus-MCP is the only one using mockall, and it does so only inside fixtures.
+Every other Rust test in the corpus is a plain `#[cfg(test)]` module with no
+test doubles at all. The Rust tier reporting nothing across the corpus was
+therefore correct, and it also meant the corpus could never reveal that the
+tier did not work. A gap in the sample is not a clean bill of health.
+
+**One repository links its own root.** `oogactx/plugins/redactx` is a symlink
+to `/root/oogactx`. Nothing is wrong with that, but any tool that starts
+following symlinks without tracking real paths will walk the whole tree twice
+and report every finding twice. It caught exactly that regression here within
+one sweep.
+
+**Rust test layout varies more than the other languages.** Momus-MCP keeps
+Rust test files under a singular `test/` directory next to the non-test source
+they exercise, rather than in Cargo's `tests/`. Classifying by directory alone
+gets both wrong: the tests are missed, or the neighbouring trait source is
+mistaken for a test and never indexed.
+
 ## Method
 
 Each repository was audited from its root with `nemesis audit --json` at default
@@ -233,3 +272,26 @@ A second cycle repeated the sweep for `nemesis fixtures`:
 The two surviving findings are the intentionally stale fixture in this
 repository. The single exit 2 is workflow-dockerized, for the reason in
 section 1.
+
+A third cycle repeated both sweeps after the Rust and symlink fixes. Nothing
+changed for any repository other than this one, which gained two findings from
+the Rust drift fixtures added alongside the fix:
+
+| | Cycle 2 | Cycle 3 |
+| --- | --- | --- |
+| Audit violations | 32 | 35 |
+| Audit repositories exiting 0 | 51 | 51 |
+| Rust test files newly discovered | 0 | 54 |
+| Fixture violations | 2 | 2 |
+| Fixture repositories exiting 0 | 52 | 52 |
+
+Of the three extra audit findings, two are this repository's new Rust drift
+fixtures and one is the genuine `save2` drift in Momus-MCP's Rust corpus. No
+other repository's count moved. The 54 additional test files are the inline
+`#[cfg(test)]` modules now scanned across seven Rust repositories (termaxa 21,
+3d-wasm 9, talos 8, Momus-MCP 5, Knossos-MCP 4, glyphfall 4, and this one 3);
+none of them contains a test double, so none of them changed a count.
+
+`audit` and `verify-symbol` were also compared directly over every flagged
+symbol in this repository and in Momus-MCP: the two produce identical finding
+sets, 22 and 12 respectively.

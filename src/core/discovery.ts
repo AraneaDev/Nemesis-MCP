@@ -2,7 +2,7 @@
 // File discovery: classify repo files into test files vs production files.
 // ---------------------------------------------------------------------------
 
-import { readdir, realpath, stat } from 'node:fs/promises';
+import { readFile, readdir, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { LanguageId, ScanDiagnostic } from './types.js';
 import { isExcluded, loadIgnoreFile } from './ignore.js';
@@ -39,10 +39,15 @@ export function isTestFile(relFile: string): boolean {
     return /^test_.*\.py$|.*_test\.py$|^tests\.py$/.test(base);
   }
   if (ext === '.rs') {
-    // Rust tests are usually inline `#[cfg(test)]` modules; a file is a test
-    // file only when it lives under a tests/ directory.
     const segs = relFile.split('/');
-    return segs.includes('tests') || segs.includes('benches');
+    // Cargo's own layout: `tests/` and `benches/` are test targets. A
+    // singular `test/` is not, and treating it as one classified the trait
+    // source sitting beside a fixture as a test, so it never reached the
+    // symbol graph and the drift beside it went unreported.
+    if (segs.includes('tests') || segs.includes('benches')) return true;
+    // Rust's dominant idiom is an inline `#[cfg(test)]` module rather than a
+    // separate file, which `hasInlineRustTests` picks up during the walk.
+    return /^test_.*\.rs$|.*_test\.rs$/.test(base);
   }
   // JS/TS family
   if (/\.(spec|test)\.[cm]?[jt]sx?$/.test(base)) return true;
@@ -53,6 +58,27 @@ export function isTestFile(relFile: string): boolean {
 export interface DiscoveredFiles {
   testFiles: string[];
   productionFiles: string[];
+}
+
+/** Largest `.rs` file worth reading just to look for a `#[cfg(test)]` module. */
+const INLINE_TEST_PROBE_LIMIT = 1_000_000;
+
+const CFG_TEST = /#\s*\[\s*cfg\s*\(\s*(all\s*\(\s*)?test\s*[),]/;
+
+/**
+ * True when a Rust source file carries its tests inline. Most Rust unit tests
+ * live in a `#[cfg(test)] mod tests` block beside the code rather than in a
+ * separate file, so treating only `tests/` as test code left the common case
+ * unscanned. Such a file is both production and test.
+ */
+async function hasInlineRustTests(abs: string): Promise<boolean> {
+  try {
+    const info = await stat(abs);
+    if (info.size > INLINE_TEST_PROBE_LIMIT) return false;
+    return CFG_TEST.test(await readFile(abs, 'utf8'));
+  } catch {
+    return false;
+  }
 }
 
 /** Recursively collect source files under `rootDir`, split into tests / production. */
@@ -70,23 +96,25 @@ export async function discoverFiles(
   const exts = opts.extensions ?? Object.keys(EXT_TO_LANG);
   const patterns = opts.respectGitignore === false ? [] : loadIgnoreFile(rootDir);
 
-  // Real paths already walked, so a symlink that points back up the tree ends
-  // the descent instead of looping forever. A tree with no symlinks in it
-  // cannot contain a cycle, so the resolution only happens once one has been
-  // crossed and the common case pays nothing.
+  // Real paths already walked. A symlink pointing at a directory that the walk
+  // has already covered, including the repository root, must not be descended
+  // again: one repository here links `plugins/redactx` to its own root, which
+  // walked and counted the entire tree twice.
+  //
+  // Every directory is resolved, not only those reached through a link,
+  // because the first visit to a shared target is usually the direct one and
+  // it is the visit that has to be recorded.
   const visited = new Set<string>();
 
-  async function walk(dir: string, viaSymlink = false): Promise<void> {
-    if (viaSymlink) {
-      let real: string;
-      try {
-        real = await realpath(dir);
-      } catch {
-        real = path.resolve(dir);
-      }
-      if (visited.has(real)) return;
-      visited.add(real);
+  async function walk(dir: string): Promise<void> {
+    let real: string;
+    try {
+      real = await realpath(dir);
+    } catch {
+      real = path.resolve(dir);
     }
+    if (visited.has(real)) return;
+    visited.add(real);
 
     let entries;
     try {
@@ -124,13 +152,19 @@ export async function discoverFiles(
 
       if (isDir) {
         if (isExcluded(rel, opts.extraExcludes, patterns, true)) continue;
-        await walk(abs, viaSymlink || isLink);
+        await walk(abs);
       } else if (isFile) {
         const lang = languageForFile(entry.name);
         if (!lang || !exts.includes(path.extname(entry.name))) continue;
         if (isExcluded(rel, opts.extraExcludes, patterns, false)) continue;
-        if (isTestFile(rel)) testFiles.push(rel);
-        else productionFiles.push(rel);
+        if (isTestFile(rel)) {
+          testFiles.push(rel);
+        } else {
+          productionFiles.push(rel);
+          if (lang === 'rust' && (await hasInlineRustTests(abs))) {
+            testFiles.push(rel);
+          }
+        }
       }
     }
   }
