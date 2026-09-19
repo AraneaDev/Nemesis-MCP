@@ -1,0 +1,37 @@
+{
+  "name": "nemesis-mcp",
+  "version": "0.1.0",
+  "description": "Static contract-integrity inspection between test doubles and production code, exposed as MCP tools + CLI.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "nemesis": "./dist/cli/main.js",
+    "nemesis-mcp": "./dist/mcp/main.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "start": "node dist/mcp/main.js --serve"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@vscode/tree-sitter-wasm": "0.3.1",
+    "web-tree-sitter": "^0.27.0",
+    "yaml": "^2.8.2",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^24",
+    "tsx": "^4",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.1"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
+  }
+}
