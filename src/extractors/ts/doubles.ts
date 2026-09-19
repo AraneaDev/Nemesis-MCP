@@ -76,7 +76,10 @@ function spyTargetOf(
   if (!first) return { target: null, method: null };
   let target: string | null = null;
   if (first.type === 'identifier') {
-    target = varTypes.get(first.text) ?? null;
+    // A tracked variable names its type; anything else is taken at face value,
+    // which is how `vi.spyOn(Svc, 'build')` reaches the class's static member.
+    // An identifier that names nothing in the graph simply fails to resolve.
+    target = varTypes.get(first.text) ?? first.text;
   } else if (first.type === 'member_expression' || first.type === 'this') {
     target = first.text;
   } else if (first.type === 'new_expression') {

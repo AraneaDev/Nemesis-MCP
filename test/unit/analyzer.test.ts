@@ -264,3 +264,71 @@ describe('object literal returns checked against declared fields', () => {
     expect(await run('export type User = Record<string, string>;', "{ id: '1' }")).toEqual([]);
   });
 });
+
+describe('optional and defaulted parameters', () => {
+  async function paramsFor(source: string, method: string) {
+    const { indexTsFile } = await import('../../src/extractors/ts/index.js');
+    const { resolveType } = await import('../../src/core/symbolGraph.js');
+    const graph = emptyGraph();
+    await indexTsFile('src/a.ts', source, graph);
+    return resolveType(graph, 'E', { language: 'typescript' })?.methods.get(method)?.params ?? [];
+  }
+
+  it('treats a question mark as optional even without a default', async () => {
+    // Requiring the `=` counted every optional parameter as mandatory, and a
+    // correct call was reported as passing too few arguments.
+    const params = await paramsFor(
+      'export class E { go(a: string, b?: string, c: number = 1) {} }',
+      'go',
+    );
+    expect(params.map((p) => p.hasDefault)).toEqual([false, true, true]);
+  });
+
+  it('reads a JavaScript default parameter', async () => {
+    const params = await paramsFor('export class E { go(a, b = 1) {} }', 'go');
+    expect(params.map((p) => p.hasDefault)).toEqual([false, true]);
+  });
+});
+
+describe('class heritage', () => {
+  async function typeIn(source: string, name: string) {
+    const { indexTsFile } = await import('../../src/extractors/ts/index.js');
+    const { resolveType } = await import('../../src/core/symbolGraph.js');
+    const graph = emptyGraph();
+    await indexTsFile('src/a.ts', source, graph);
+    return { graph, type: resolveType(graph, name, { language: 'typescript' }) };
+  }
+
+  it('records what a class extends and implements', async () => {
+    const { type } = await typeIn('export class C extends B implements I, J {}', 'C');
+    expect(type?.extends).toEqual(['B']);
+    expect(type?.implements).toEqual(['I', 'J']);
+  });
+
+  it('strips generics and namespaces from a heritage entry', async () => {
+    const { type } = await typeIn('export class C extends ns.Base<Item> {}', 'C');
+    expect(type?.extends).toEqual(['Base']);
+  });
+
+  it('records what an interface extends', async () => {
+    const { type } = await typeIn('export interface I extends J, K {}', 'I');
+    expect(type?.extends).toEqual(['J', 'K']);
+  });
+
+  it('inherits a member from a base class in the graph', async () => {
+    const { resolveMember } = await import('../../src/core/symbolGraph.js');
+    const { graph, type } = await typeIn(
+      'export class Base { shared(): void {} }\nexport class C extends Base { own(): void {} }',
+      'C',
+    );
+    expect(resolveMember(graph, type!, 'shared')).not.toBeNull();
+  });
+
+  it('marks a base outside the scanned tree as unknowable', async () => {
+    // `class X extends EventEmitter` must not report every inherited member
+    // as a definite ghost.
+    const { hasUnresolvedAncestor } = await import('../../src/core/symbolGraph.js');
+    const { graph, type } = await typeIn('export class C extends EventEmitter {}', 'C');
+    expect(hasUnresolvedAncestor(graph, type!)).toBe(true);
+  });
+});

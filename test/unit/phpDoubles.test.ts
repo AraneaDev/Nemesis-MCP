@@ -140,3 +140,33 @@ describe('things that are not doubles', () => {
     expect(found.flatMap(methodsOf)).toEqual([]);
   });
 });
+
+describe('queued return values', () => {
+  it('checks every value of willReturnOnConsecutiveCalls', async () => {
+    // Only the first value was ever looked at, so a wrong type later in the
+    // queue passed unnoticed.
+    const found = await doubles(`    $m = $this->createMock(Gateway::class);
+    $m->method('charge')->willReturnOnConsecutiveCalls(1, 'two', 3);`);
+    expect(found.map((d) => d.returnExpr)).toEqual(['1', "'two'", '3']);
+    expect(found.every((d) => methodsOf(d).includes('charge'))).toBe(true);
+  });
+
+  it('checks every value of a Mockery andReturn queue', async () => {
+    const found = await doubles(`    $m = Mockery::mock(Gateway::class);
+    $m->shouldReceive('charge')->andReturn(1, 2);`);
+    expect(found.map((d) => d.returnExpr)).toEqual(['1', '2']);
+  });
+
+  it('counts arity once, not once per queued value', async () => {
+    const found = await doubles(`    $m = $this->createMock(Gateway::class);
+    $m->method('charge')->with(1)->willReturnOnConsecutiveCalls(1, 2, 3);`);
+    expect(found.map((d) => d.withArity)).toEqual([1, null, null]);
+  });
+
+  it('leaves a single willReturn alone', async () => {
+    const found = await doubles(`    $m = $this->createMock(Gateway::class);
+    $m->method('charge')->willReturn(7);`);
+    expect(found).toHaveLength(1);
+    expect(found[0]?.returnExpr).toBe('7');
+  });
+});

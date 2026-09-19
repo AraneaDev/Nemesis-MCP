@@ -13,12 +13,17 @@ const FACTORY_FNS = /^(createMock|createStub|createPartialMock|mock|spy)$/;
 interface ChainInfo {
   methods: Array<{ name: string; line: number }>;
   withArity: number | null;
-  returnExpr: string | null;
+  /**
+   * Every configured return value. `willReturnOnConsecutiveCalls(a, b, c)` and
+   * Mockery's `andReturn(a, b)` queue one value per call, and each has to
+   * satisfy the declared return type; only the first was ever looked at.
+   */
+  returnExprs: string[];
 }
 
 /** Collect method/with/return info walking the fluent chain via `object` fields. */
 function chainInfo(root: SyntaxNode): ChainInfo {
-  const info: ChainInfo = { methods: [], withArity: null, returnExpr: null };
+  const info: ChainInfo = { methods: [], withArity: null, returnExprs: [] };
   let cur: SyntaxNode | null = root;
   while (cur) {
     if (cur.type === 'member_call_expression' || cur.type === 'method_call_expression') {
@@ -45,7 +50,13 @@ function chainInfo(root: SyntaxNode): ChainInfo {
         name === 'andSet' ||
         name === 'andReturnUsing'
       ) {
-        info.returnExpr = firstArg?.text ?? null;
+        const values =
+          name === 'willReturnOnConsecutiveCalls' || name === 'andReturn'
+            ? (args?.namedChildren ?? []).map((a) => a.text)
+            : firstArg
+              ? [firstArg.text]
+              : [];
+        if (values.length > 0) info.returnExprs = values;
       }
       cur = field(cur, 'object');
     } else if (cur.type === 'scoped_call_expression') {
@@ -191,23 +202,29 @@ export async function extractPhpDoubles(relFile: string, source: string): Promis
     if (!hit) continue;
 
     const info = chainInfo(node);
-    if (info.methods.length === 0 && info.withArity === null && info.returnExpr === null) {
+    if (info.methods.length === 0 && info.withArity === null && info.returnExprs.length === 0) {
       continue; // nothing configured on the double
     }
-    doubles.push({
-      framework: hit.framework,
-      language: 'php',
-      file: relFile,
-      line: node.startPosition.row + 1,
-      targetSymbol: hit.target,
-      method: info.methods[0]?.name ?? null,
-      methods: info.methods,
-      withArity: info.withArity,
-      assertedArity: null,
-      returnTypeHint: null,
-      returnExpr: info.returnExpr,
-      confidence: 'definite',
-    });
+    // One double per queued return value, so each is checked against the
+    // declared type. The extras carry no arity, which would otherwise be
+    // reported once per value.
+    const returns = info.returnExprs.length > 0 ? info.returnExprs : [null];
+    for (const [index, returnExpr] of returns.entries()) {
+      doubles.push({
+        framework: hit.framework,
+        language: 'php',
+        file: relFile,
+        line: node.startPosition.row + 1,
+        targetSymbol: hit.target,
+        method: info.methods[0]?.name ?? null,
+        methods: info.methods,
+        withArity: index === 0 ? info.withArity : null,
+        assertedArity: null,
+        returnTypeHint: null,
+        returnExpr,
+        confidence: 'definite',
+      });
+    }
   }
 
   return doubles;

@@ -14,7 +14,11 @@ import { addType, addFunction } from '../../core/symbolGraph.js';
 import { parseSource } from '../../parser/loader.js';
 import { walk, field, typeTextOf, visibilityOf } from '../walk.js';
 
-const METHOD_TYPES = new Set(['method_definition', 'method_signature', 'abstract_method_signature']);
+const METHOD_TYPES = new Set([
+  'method_definition',
+  'method_signature',
+  'abstract_method_signature',
+]);
 
 /** Extract a flat field map from an object type / interface body / type literal. */
 export function fieldsFromTypeText(text: string): Map<string, FieldSymbol> | null {
@@ -52,12 +56,20 @@ export function fieldsFromTypeText(text: string): Map<string, FieldSymbol> | nul
   return fields.size > 0 ? fields : null;
 }
 
-function fieldsFromClassBody(body: import('web-tree-sitter').Node | null): Map<string, FieldSymbol> | null {
+function fieldsFromClassBody(
+  body: import('web-tree-sitter').Node | null,
+): Map<string, FieldSymbol> | null {
   if (!body) return null;
   const fields = new Map<string, FieldSymbol>();
   for (const child of body.namedChildren) {
-    if (!['property_definition', 'field_definition', 'public_field_definition'].includes(child.type)) continue;
-    const name = field(child, 'name')?.text ?? child.namedChildren.find((n) => n.type === 'property_identifier' || n.type === 'identifier')?.text;
+    if (
+      !['property_definition', 'field_definition', 'public_field_definition'].includes(child.type)
+    )
+      continue;
+    const name =
+      field(child, 'name')?.text ??
+      child.namedChildren.find((n) => n.type === 'property_identifier' || n.type === 'identifier')
+        ?.text;
     if (!name) continue;
     fields.set(name, {
       name,
@@ -81,8 +93,17 @@ export async function indexTsFile(
   graph: SymbolGraph,
 ): Promise<void> {
   const ext = path.extname(relFile);
-  const grammar = ext === '.tsx' ? 'tsx' : ext === '.js' || ext === '.jsx' || ext === '.mjs' || ext === '.cjs' ? 'javascript' : 'typescript';
-  const parsed = await parseSource(grammar === 'javascript' ? 'javascript' : 'typescript', source, grammar);
+  const grammar =
+    ext === '.tsx'
+      ? 'tsx'
+      : ext === '.js' || ext === '.jsx' || ext === '.mjs' || ext === '.cjs'
+        ? 'javascript'
+        : 'typescript';
+  const parsed = await parseSource(
+    grammar === 'javascript' ? 'javascript' : 'typescript',
+    source,
+    grammar,
+  );
   const { root } = parsed;
 
   // Pass 1: collect declarations (classes, interfaces, enums, aliases).
@@ -95,7 +116,7 @@ export async function indexTsFile(
       const name = field(node, 'name')?.text;
       if (name) decls.push({ name, kind: 'interface', node, line: node.startPosition.row + 1 });
     } else if (node.type === 'enum_declaration') {
-      const name = field(node, 'name')?.text .trim?.() ?? field(node, 'name')?.text;
+      const name = field(node, 'name')?.text.trim?.() ?? field(node, 'name')?.text;
       if (name) decls.push({ name, kind: 'enum', node, line: node.startPosition.row + 1 });
     } else if (node.type === 'type_alias_declaration') {
       const name = field(node, 'name')?.text;
@@ -131,8 +152,21 @@ export async function indexTsFile(
       if (n.type === 'extends_clause' || n.type === 'implements_clause') {
         const target = n.type === 'extends_clause' ? 'extends' : 'implements';
         for (const c of n.namedChildren) {
-          if (c.type === 'type_identifier') {
-            (target === 'extends' ? typeSym.extends : typeSym.implements).push(c.text);
+          // A class `extends` clause holds an expression, because JavaScript
+          // allows `extends someExpr`, so the base appears as an `identifier`
+          // rather than a `type_identifier`. Matching only the latter left
+          // every class's heritage empty: inherited members looked missing,
+          // and a base outside the scanned tree could not be recognised.
+          if (
+            c.type === 'type_identifier' ||
+            c.type === 'identifier' ||
+            c.type === 'member_expression' ||
+            c.type === 'nested_type_identifier'
+          ) {
+            const bare = c.text.split('<')[0]?.split('.').pop()?.trim();
+            if (bare && /^[A-Za-z_$][\w$]*$/.test(bare)) {
+              (target === 'extends' ? typeSym.extends : typeSym.implements).push(bare);
+            }
           }
         }
       }
@@ -165,7 +199,11 @@ export async function indexTsFile(
           belongs = true;
           break;
         }
-        if (anc.type === 'class_declaration' || anc.type === 'class' || anc.type === 'interface_declaration') {
+        if (
+          anc.type === 'class_declaration' ||
+          anc.type === 'class' ||
+          anc.type === 'interface_declaration'
+        ) {
           break; // reached a different declaration first
         }
         anc = anc.parent;
@@ -208,11 +246,17 @@ function paramFromTs(p: import('web-tree-sitter').Node): ParamSymbol | null {
     return {
       name,
       type: typeTextOf(p, 'type'),
-      hasDefault: p.type === 'optional_parameter' || p.type === 'required_parameter'
-        ? p.children.some((c) => c.text === '=')
-        : false,
+      // `code?: string` is optional whether or not it also has a default.
+      // Requiring the `=` counted every optional parameter as mandatory, so a
+      // correct call was reported as passing too few arguments.
+      hasDefault: p.type === 'optional_parameter' || p.children.some((c) => c.text === '='),
       variadic: p.children.some((c) => c.type === 'rest_pattern'),
     };
+  }
+  if (p.type === 'assignment_pattern') {
+    // JS default: `function f(a = 1)`
+    const name = field(p, 'left')?.text ?? p.text;
+    return { name, type: null, hasDefault: true, variadic: false };
   }
   if (p.type === 'identifier' || p.type === 'shorthand_property_identifier') {
     return { name: p.text, type: null, hasDefault: false, variadic: false };
@@ -220,7 +264,12 @@ function paramFromTs(p: import('web-tree-sitter').Node): ParamSymbol | null {
   if (p.type === 'formal_parameter') {
     // JS grammar
     const name = field(p, 'pattern')?.text ?? p.text;
-    return { name, type: null, hasDefault: false, variadic: false };
+    return {
+      name,
+      type: null,
+      hasDefault: p.children.some((c) => c.text === '='),
+      variadic: false,
+    };
   }
   return null;
 }

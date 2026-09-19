@@ -104,3 +104,19 @@ describe('members configured without spyOn', () => {
     expect(found).toEqual([]);
   });
 });
+
+describe('static members', () => {
+  it('spies on a static method through the class itself', async () => {
+    const [d] = await doubles(
+      `import { vi } from 'vitest';\nimport { Svc } from '../src/svc';\nvi.spyOn(Svc, 'build').mockReturnValue(1);`,
+    );
+    expect(d?.targetSymbol).toBe('Svc');
+    expect(d?.method).toBe('build');
+    expect(d?.returnExpr).toBe('1');
+  });
+
+  it('still prefers a tracked variable type over its name', async () => {
+    const [d] = await doubles(`${PRELUDE}vi.spyOn(s, 'load').mockReturnValue(1);`);
+    expect(d?.targetSymbol).toBe('Svc');
+  });
+});
