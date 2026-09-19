@@ -107,4 +107,17 @@ describe('nemesis audit end-to-end', () => {
     const ghost = result.violations.find((v: { type: string }) => v.type === 'GHOST_METHOD');
     expect(ghost.suggestion).toBeTruthy();
   }, 120_000);
+
+  it('says how many doubles it actually compared', () => {
+    // `doubles_inspected` counts doubles found. On one repository in the
+    // corpus it read 4,772 when 47 had been compared against anything, and a
+    // clean result has to carry the evidence for how clean it is.
+    const { stdout } = runCli(['audit', 'fixtures', '--strictness=all', '--json'], root);
+    const { summary } = JSON.parse(stdout);
+    const accounted =
+      summary.doubles_checked + summary.doubles_unresolved + summary.doubles_unknowable;
+    expect(accounted).toBeLessThanOrEqual(summary.doubles_inspected);
+    expect(summary.doubles_checked).toBeGreaterThan(0);
+    expect(summary.doubles_unknowable).toBeGreaterThan(0);
+  }, 120_000);
 });

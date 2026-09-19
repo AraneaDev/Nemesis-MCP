@@ -10,6 +10,11 @@ export function renderText(result: AuditResult): string {
   lines.push(
     `Scanned ${s.scanned_test_files} test file(s), inspected ${s.doubles_inspected} double(s).`,
   );
+  if (s.doubles_checked !== undefined) {
+    lines.push(
+      `  ${s.doubles_checked} compared, ${s.doubles_unresolved} unresolved, ${s.doubles_unknowable} with no contract to check.`,
+    );
+  }
   if (s.skipped_languages?.length) {
     lines.push(`Skipped languages (grammar load failed): ${s.skipped_languages.join(', ')}`);
   }

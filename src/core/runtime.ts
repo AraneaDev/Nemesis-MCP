@@ -6,6 +6,7 @@ import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type {
   AnalyzeOptions,
+  AnalyzeStats,
   AuditResult,
   Finding,
   LanguageId,
@@ -254,7 +255,8 @@ export async function runAudit(opts: RuntimeOptions): Promise<AuditResult> {
     });
   }
 
-  const findings = analyzeDoubles({ doubles, graph, fileLines, options: opts });
+  const stats: AnalyzeStats = { checked: 0, unresolved: 0, unknowable: 0, noTarget: 0 };
+  const findings = analyzeDoubles({ doubles, graph, fileLines, options: opts, stats });
   const filtered = findings.filter((f) => passesStrictness(opts.strictness, f));
 
   return {
@@ -262,6 +264,9 @@ export async function runAudit(opts: RuntimeOptions): Promise<AuditResult> {
       scanned_test_files: testFiles.length,
       doubles_inspected: doubles.length,
       violations_count: filtered.length,
+      doubles_checked: stats.checked,
+      doubles_unresolved: stats.unresolved,
+      doubles_unknowable: stats.unknowable,
       ...(graph.skippedLanguages.length ? { skipped_languages: graph.skippedLanguages } : {}),
       ...(diagnostics.length ? { diagnostics, partial: true } : {}),
     },
