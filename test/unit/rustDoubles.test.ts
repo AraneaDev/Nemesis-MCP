@@ -184,3 +184,26 @@ describe('mockall return values', () => {
     expect(found[0]?.returnExpr).toBeNull();
   });
 });
+
+describe('mock! blocks', () => {
+  it('reads the methods a mock! block declares', async () => {
+    // The escape in the regex was doubled, so this matched a literal `\b`
+    // and every mock! block came back with no methods at all.
+    const found = await doubles(`
+      mock! {
+        pub Store {
+          fn read(&self, key: &str) -> String;
+          fn purge(&self) -> bool;
+        }
+      }
+    `);
+    const block = found.find((d) => d.framework === 'mockall mock!');
+    expect(block?.targetSymbol).toBe('Store');
+    expect(block?.methods.map((m) => m.name)).toEqual(['read', 'purge']);
+  });
+
+  it('records the block even when the target cannot be read', async () => {
+    const found = await doubles('mock! { }');
+    expect(found.every((d) => d.methods.length === 0)).toBe(true);
+  });
+});

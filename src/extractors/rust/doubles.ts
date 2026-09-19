@@ -91,7 +91,9 @@ export async function extractRustDoubles(relFile: string, source: string): Promi
       const macro = field(node, 'macro');
       if (macro?.text === 'mock') {
         const target = mockTarget(node);
-        const methods = [...node.text.matchAll(/\\bfn\\s+(\\w+)/g)]
+        // The escape was doubled, so this matched a literal `\b` and every
+        // `mock!` block came back with no methods at all.
+        const methods = [...node.text.matchAll(/\bfn\s+(\w+)/g)]
           .map((match) => ({
             name: match[1] ?? '',
             line: node.startPosition.row + 1,

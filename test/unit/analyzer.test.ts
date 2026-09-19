@@ -869,3 +869,76 @@ describe('enum backing values in a stub', () => {
     expect(await run('status', { returnExpr: 'Status::Shut' })).toEqual([]);
   });
 });
+
+describe('literal union types', () => {
+  async function run(signature: string, extra: Record<string, unknown>) {
+    const { analyzeDoubles } = await import('../../src/core/analyzer.js');
+    const { indexTsFile } = await import('../../src/extractors/ts/index.js');
+    const graph = emptyGraph();
+    await indexTsFile('src/svc.ts', `export class Svc { ${signature} }`, graph);
+    return analyzeDoubles({
+      doubles: [
+        {
+          framework: 'vi.spyOn',
+          language: 'typescript',
+          file: 'tests/a.test.ts',
+          line: 3,
+          targetSymbol: 'Svc',
+          method: 'mode',
+          methods: [{ name: 'mode', line: 3 }],
+          withArity: null,
+          assertedArity: null,
+          returnTypeHint: null,
+          returnExpr: null,
+          confidence: 'definite',
+          ...extra,
+        } as never,
+      ],
+      graph,
+      fileLines: new Map([['tests/a.test.ts', ['', '', '', '']]]),
+      options: { strictness: 'all' },
+    });
+  }
+
+  const STRINGS = "mode(): 'on' | 'off' { return 'on'; }";
+  const NUMBERS = 'mode(): 1 | 2 | 3 { return 1; }';
+
+  it('accepts a value that is in the union', async () => {
+    // Every member reduces to the same kind, so a kind comparison would wave
+    // any string through and this check has to run before it.
+    expect(await run(STRINGS, { returnExpr: "'off'" })).toEqual([]);
+    expect(await run(NUMBERS, { returnExpr: '2' })).toEqual([]);
+  });
+
+  it('reports a value that is not, listing what is allowed', async () => {
+    expect((await run(STRINGS, { returnExpr: "'auto'" }))[0]?.message).toBe(
+      "Stub returns 'auto' but Svc::mode only returns 'on' or 'off'.",
+    );
+  });
+
+  it('leaves numbers unquoted in the message', async () => {
+    expect((await run(NUMBERS, { returnExpr: '5' }))[0]?.message).toBe(
+      'Stub returns 5 but Svc::mode only returns 1, 2 or 3.',
+    );
+  });
+
+  it('says nothing about a union that is not all literals', async () => {
+    // `string | null` accepts any string, so the values say nothing.
+    expect(
+      await run("mode(): string | null { return 'x'; }", { returnExpr: "'anything'" }),
+    ).toEqual([]);
+  });
+
+  it('says nothing about a single literal type', async () => {
+    // One literal is a constant, not a choice, and the kind check covers it.
+    expect(await run("mode(): 'on' { return 'on'; }", { returnExpr: "'on'" })).toEqual([]);
+  });
+
+  it('checks an argument against a literal union too', async () => {
+    const found = await run("mode(key: 'a' | 'b'): void {}", {
+      withArity: 1,
+      withArgs: ["'z'"],
+    });
+    expect(found[0]?.message).toBe("Argument 1 is 'z' but 'key' only accepts 'a' or 'b'.");
+  });
+});

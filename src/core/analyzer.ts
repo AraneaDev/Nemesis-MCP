@@ -316,17 +316,32 @@ function classify(
             message: `Stub returns '${stubType}' but ${owner.name}::${m.name} declares no return type, so the contract cannot be verified.`,
           });
         }
-      } else if (stubType && typesCompatible(stubType, declared, lang) && d.returnExpr !== null) {
-        // The value is compatible in shape. If it is an object literal and the
-        // declared type is one whose fields are known, the fields themselves
-        // can still be wrong: a mock returning `{ id }` where the code reads
-        // `.email` is a stale double that nothing else would catch.
-        findings.push(...structuralFieldFindings(d, m, owner, declared, graph, lines, lang));
       } else {
+        // A literal value carries more than its kind. A declared type made of
+        // literals, or a backed enum, accepts only certain values, and every
+        // one of them reduces to the same kind, so the kind comparison below
+        // would wave any string through. These run first for that reason.
+        const unionHit =
+          d.returnExpr !== null ? literalUnionCheck(declared, d.returnExpr, lang) : null;
         const enumHit =
-          d.returnExpr !== null ? enumLiteralCheck(graph, declared, d.returnExpr, d) : null;
-        if (enumHit === 'ok') {
-          // A valid case value; the kind comparison below would reject it.
+          unionHit === null && d.returnExpr !== null
+            ? enumLiteralCheck(graph, declared, d.returnExpr, d)
+            : null;
+        if (unionHit && unionHit !== 'ok') {
+          if (!suppressed(lines, m.line)) {
+            findings.push({
+              file: d.file,
+              line: m.line,
+              type: 'RETURN_DRIFT',
+              confidence: 'definite',
+              evidence: 'typed',
+              double_type: d.framework,
+              target: `${owner.name}::${m.name}`,
+              message: `Stub returns ${d.returnExpr?.trim()} but ${owner.name}::${m.name} only returns ${formatAllowed(unionHit.allowed)}.`,
+            });
+          }
+        } else if (unionHit === 'ok' || enumHit === 'ok') {
+          // A declared value; the comparisons below would misjudge it.
         } else if (enumHit) {
           if (!suppressed(lines, m.line)) {
             findings.push({
@@ -341,7 +356,15 @@ function classify(
               ...(enumHit.suggestion ? { suggestion: enumHit.suggestion } : {}),
             });
           }
-        } else if (stubType && !typesCompatible(stubType, declared, lang)) {
+        } else if (stubType && typesCompatible(stubType, declared, lang)) {
+          // Compatible in shape. If it is an object literal and the declared
+          // type's fields are known, the fields can still be wrong: a mock
+          // returning `{ id }` where the code reads `.email` is a stale double
+          // that nothing else would catch.
+          if (d.returnExpr !== null) {
+            findings.push(...structuralFieldFindings(d, m, owner, declared, graph, lines, lang));
+          }
+        } else if (stubType) {
           // Two named types that simply differ may still be related by
           // inheritance, and the base class usually lives in a dependency
           // directory this tool never walks. Report it, but not as blocking.
@@ -827,6 +850,22 @@ function argumentTypeFindings(
     const literal = inferType(argument, lang);
     if (!literal) continue; // variable, matcher, call: nothing to compare
 
+    const unionHit = literalUnionCheck(param.type, argument, lang);
+    if (unionHit === 'ok') continue;
+    if (unionHit) {
+      findings.push({
+        file: d.file,
+        line: m.line,
+        type: 'ARITY_MISMATCH',
+        confidence: 'definite',
+        evidence: 'typed',
+        double_type: d.framework,
+        target: `${owner.name}::${m.name}`,
+        message: `Argument ${index + 1} is ${argument.trim()} but '${param.name}' only accepts ${formatAllowed(unionHit.allowed)}.`,
+      });
+      continue;
+    }
+
     const enumHit = enumLiteralCheck(graph, param.type, argument, d);
     if (enumHit === 'ok') continue;
     if (enumHit) {
@@ -1047,4 +1086,48 @@ function enumLiteralCheck(
     }
   }
   return { enumName: type.name, suggestion };
+}
+
+/** A type written as a literal, such as `'on'` or `42`. */
+function literalTypeValue(text: string): string | null {
+  const t = text.trim();
+  if (/^(['"`])[\s\S]*\1$/.test(t)) return t.slice(1, -1);
+  if (/^-?\d+(\.\d+)?$/.test(t)) return t;
+  if (/^(true|false)$/.test(t)) return t;
+  return null;
+}
+
+/**
+ * A literal against a declared type made entirely of literals, such as
+ * `'on' | 'off'` or `1 | 2 | 3`. Every member reduces to the same kind, so
+ * comparing kinds accepts any string at all; what decides is the value.
+ */
+function formatAllowed(allowed: string[]): string {
+  // Quote what was written as a string; leave numbers and booleans bare.
+  const shown = allowed.map((a) => (/^(-?\d+(\.\d+)?|true|false)$/.test(a) ? a : `'${a}'`));
+  if (shown.length <= 1) return shown[0] ?? '';
+  return `${shown.slice(0, -1).join(', ')} or ${shown[shown.length - 1]}`;
+}
+
+function literalUnionCheck(
+  declared: string,
+  literal: string,
+  lang: string,
+): 'ok' | { allowed: string[] } | null {
+  const kind = inferType(literal, lang);
+  if (kind !== 'string' && kind !== 'int' && kind !== 'float' && kind !== 'number') {
+    return null;
+  }
+  const parts = alternatives(declared);
+  if (parts.length < 2) return null; // a single literal type is not a choice
+
+  const allowed: string[] = [];
+  for (const part of parts) {
+    const value = literalTypeValue(part);
+    if (value === null) return null; // not every member is a literal
+    allowed.push(value);
+  }
+
+  const written = literal.trim().replace(/^(['"`])([\s\S]*)\1$/, '$2');
+  return allowed.includes(written) ? 'ok' : { allowed };
 }

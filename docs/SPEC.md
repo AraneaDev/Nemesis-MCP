@@ -152,6 +152,11 @@ is listed in `unparsable_fixtures`. Neither makes the scan partial.
      longer has. A renamed case still parses and still type-checks against the
      enum, so nothing else here would notice. Enum members are indexed for
      both PHP and TypeScript.
+   - A scalar literal against a declared type made entirely of literals, such
+     as `'on' | 'off'` or `1 | 2 | 3`, is compared against those values. Every
+     member reduces to the same kind, so a kind comparison waves any string
+     through. A union that is not all literals, and a single literal type,
+     both fall through to the ordinary check.
    - A scalar literal against a backed-enum return or parameter is compared
      against the enum's case values rather than by kind, because a string is
      the right shape for one whatever it says. An enum with no backing values
