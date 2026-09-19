@@ -111,6 +111,12 @@ export interface TestDouble {
   returnTypeHint: string | null;
   /** Source text of the return expression, if any. */
   returnExpr: string | null;
+  /**
+   * A module double (`vi.mock('../src/api', factory)`): the specifier it
+   * replaces. `methods` then holds the keys the factory supplies rather than
+   * members of a class.
+   */
+  moduleSpecifier?: string;
   /** The stub supplies a resolved value, so it believes the method is async. */
   resolvedReturn?: boolean;
   /**

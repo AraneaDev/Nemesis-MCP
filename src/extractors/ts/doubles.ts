@@ -180,6 +180,39 @@ function fakeSignature(
   return { arity: declared.length, types, body };
 }
 
+/**
+ * The keys a `vi.mock` factory supplies, when it supplies an object literal
+ * and nothing else. A factory that spreads `importOriginal()`, computes a key,
+ * or returns anything but a literal is not a list of names.
+ */
+function factoryKeys(
+  factory: SyntaxNode | undefined,
+): Array<{ name: string; line: number }> | null {
+  if (!factory) return null;
+  if (factory.type !== 'arrow_function' && factory.type !== 'function_expression') return null;
+  let body = field(factory, 'body');
+  if (body?.type === 'statement_block') {
+    const ret = body.namedChildren.find((c) => c.type === 'return_statement');
+    body = ret?.namedChildren[0] ?? null;
+  }
+  while (body?.type === 'parenthesized_expression') body = body.namedChildren[0] ?? null;
+  if (body?.type === 'await_expression') return null;
+  if (!body || body.type !== 'object') return null;
+  const keys: Array<{ name: string; line: number }> = [];
+  for (const property of body.namedChildren) {
+    if (property.type === 'spread_element') return null; // the rest came from elsewhere
+    if (property.type === 'comment') continue;
+    const key = field(property, 'key');
+    if (!key) return null;
+    if (key.type === 'computed_property_name') return null;
+    keys.push({
+      name: key.type === 'string' ? unquote(key.text) : key.text,
+      line: property.startPosition.row + 1,
+    });
+  }
+  return keys;
+}
+
 export interface TsDoublesResult {
   doubles: TestDouble[];
 }
@@ -292,6 +325,38 @@ export async function extractTsDoubles(
         if (n && /^\d+$/.test(n.text)) rec.assertedArity = parseInt(n.text, 10);
       }
     }
+  }
+
+  // `vi.mock('../src/api', () => ({ getUser: vi.fn() }))` replaces a module
+  // wholesale. The keys are what the test believes the module exports, and a
+  // key that is no longer exported is configuration nobody will ever reach.
+  for (const { node } of walk(root)) {
+    if (node.type !== 'call_expression') continue;
+    const call = memberCall(node);
+    if (!call || !/^(mock|doMock)$/.test(call.property)) continue;
+    if (!apiRoot(call)) continue;
+    const args = call.argsNode?.namedChildren ?? [];
+    const specifierNode = args[0];
+    if (!specifierNode || specifierNode.type !== 'string') continue;
+    const specifier = unquote(specifierNode.text);
+    if (!specifier.startsWith('.')) continue;
+    const keys = factoryKeys(args[1]);
+    if (!keys) continue;
+    doubles.push({
+      framework: `${apiRoot(call)}.mock`,
+      language,
+      file: relFile,
+      line: node.startPosition.row + 1,
+      targetSymbol: specifier,
+      moduleSpecifier: specifier,
+      method: null,
+      methods: keys,
+      withArity: null,
+      assertedArity: null,
+      returnTypeHint: null,
+      returnExpr: null,
+      confidence: 'definite',
+    });
   }
 
   for (const rec of spies) {

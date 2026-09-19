@@ -166,4 +166,27 @@ describe('the export list a module publishes', () => {
   it('gives up on a destructured export, whose names it cannot list', async () => {
     expect(await exportsOf('export const { a, b } = obj;')).toBeNull();
   });
+
+  it('reads CommonJS, which is an export list too', async () => {
+    const names = await exportsOf(
+      ['function getPool() {}', 'const sql = 1;', 'module.exports = { getPool, sql };'].join('\n'),
+    );
+    expect([...(names ?? [])].sort()).toEqual(['getPool', 'sql']);
+  });
+
+  it('reads properties assigned onto exports', async () => {
+    const names = await exportsOf('exports.one = 1;\nmodule.exports.two = 2;');
+    expect([...(names ?? [])].sort()).toEqual(['one', 'two']);
+  });
+
+  it('gives up when module.exports is not a literal', async () => {
+    expect(await exportsOf('module.exports = buildApi();')).toBeNull();
+    expect(await exportsOf('module.exports = { ...base, extra: 1 };')).toBeNull();
+  });
+
+  it('gives up on a file that turned out to export nothing', async () => {
+    // Either it is not a module, or it exports in a way this does not read.
+    // Neither is evidence that a name is missing.
+    expect(await exportsOf('const x = 1;')).toBeNull();
+  });
 });

@@ -103,6 +103,41 @@ function recordExports(
 ): void {
   const names = new Set<string>();
   let complete = true;
+  // CommonJS. `module.exports = { getPool, sql }` is an export list as much as
+  // an `export` keyword is, and reading only the keyword left every CJS file
+  // looking like a module that exports nothing at all.
+  for (const { node } of walk(root)) {
+    if (node.type !== 'assignment_expression') continue;
+    const left = field(node, 'left')?.text ?? '';
+    if (!/^(module\.)?exports\b/.test(left)) continue;
+    const property = /^(?:module\.)?exports\.([A-Za-z_$][\w$]*)$/.exec(left);
+    if (property?.[1]) {
+      names.add(property[1]);
+      continue;
+    }
+    if (!/^(module\.)?exports$/.test(left)) {
+      complete = false;
+      continue;
+    }
+    const right = field(node, 'right');
+    if (right?.type !== 'object') {
+      complete = false;
+      continue;
+    }
+    for (const entry of right.namedChildren) {
+      if (entry.type === 'comment') continue;
+      if (entry.type === 'spread_element') {
+        complete = false;
+        continue;
+      }
+      const key = entry.type === 'shorthand_property_identifier' ? entry : field(entry, 'key');
+      if (!key || key.type === 'computed_property_name') {
+        complete = false;
+        continue;
+      }
+      names.add(key.type === 'string' ? key.text.replace(/^['"`]|['"`]$/g, '') : key.text);
+    }
+  }
   for (const statement of root.namedChildren) {
     if (statement.type !== 'export_statement') continue;
     const children = statement.namedChildren;
@@ -134,7 +169,9 @@ function recordExports(
       }
     }
   }
-  graph.exportsByFile.set(relFile, complete ? names : null);
+  // A file that turned out to export nothing says nothing: it is either not a
+  // module or exports in a way this does not read, and neither is evidence.
+  graph.exportsByFile.set(relFile, complete && names.size > 0 ? names : null);
 }
 
 export async function indexTsFile(

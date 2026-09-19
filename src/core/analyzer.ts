@@ -66,6 +66,10 @@ function classify(
   const findings: Finding[] = [];
   if (!d.targetSymbol) return findings;
 
+  if (d.moduleSpecifier) {
+    return moduleShapeFindings(d, lines, graph.exportsByFile);
+  }
+
   const lang = d.language;
   const hint = { language: d.language, fromFile: d.file };
 
@@ -1261,6 +1265,52 @@ function literalUnionCheck(
 const IMPORT_NAMED = /^\s*import\s+(?:type\s+)?\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]/;
 const IMPORT_DEFAULT = /^\s*import\s+(?:type\s+)?([A-Za-z_$][\w$]*)\s+from\s*['"]([^'"]+)['"]/;
 const EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs'];
+
+/**
+ * A module replaced wholesale supplies a key per export it stands in for.
+ * A key the module does not export is configuration nothing can reach: the
+ * import of that name resolves to the real module's missing export, and the
+ * fake sits beside it unused until someone touches it.
+ *
+ * Only a file this scan read and whose export list it could take whole.
+ * `default` always passes: a module with no default export is a compile error
+ * long before this could say anything useful about it.
+ */
+function moduleShapeFindings(
+  d: TestDouble,
+  lines: string[],
+  exportsByFile: Map<string, Set<string> | null>,
+): Finding[] {
+  const findings: Finding[] = [];
+  const specifier = d.moduleSpecifier ?? '';
+  for (const candidate of resolveSpecifier(d.file, specifier)) {
+    if (!exportsByFile.has(candidate)) continue;
+    const exports = exportsByFile.get(candidate);
+    if (!exports) return findings;
+    for (const m of d.methods) {
+      if (m.name === 'default' || exports.has(m.name)) continue;
+      // A leading double underscore is the ecosystem's mark for a handle the
+      // fake adds for the test's own use: `__reset`, `__set`, `__esModule`.
+      // Those are not claims about what the module exports.
+      if (m.name.startsWith('__')) continue;
+      if (suppressed(lines, m.line)) continue;
+      const suggestion = nearestName(m.name, exports);
+      findings.push({
+        file: d.file,
+        line: m.line,
+        type: 'GHOST_METHOD',
+        confidence: 'definite',
+        evidence: 'typed',
+        double_type: d.framework,
+        target: `${specifier}::${m.name}`,
+        message: `The mock of '${specifier}' supplies '${m.name}', which that module does not export.${suggestion ? ` Did you mean '${suggestion}'?` : ''}`,
+        ...(suggestion ? { suggestion } : {}),
+      });
+    }
+    return findings;
+  }
+  return findings;
+}
 
 /**
  * A target the test imports from a file this scan actually read, where that

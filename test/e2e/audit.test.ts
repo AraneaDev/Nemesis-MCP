@@ -74,8 +74,8 @@ describe('nemesis audit end-to-end', () => {
     expect(result.summary.scanned_test_files).toBeGreaterThanOrEqual(16);
     expect(result.summary.doubles_inspected).toBeGreaterThanOrEqual(16);
 
-    expect(result.summary.scanned_test_files).toBe(32);
-    expect(result.summary.doubles_inspected).toBe(53);
+    expect(result.summary.scanned_test_files).toBe(33);
+    expect(result.summary.doubles_inspected).toBe(54);
     const files = result.violations.map((v: { file: string }) => v.file);
     for (const languageDir of ['typescript', 'javascript', 'php', 'python', 'rust']) {
       expect(files.some((file: string) => file.includes(`experiments/${languageDir}/`))).toBe(true);
