@@ -199,3 +199,68 @@ describe('dynamic method names', () => {
     expect(findings.map((f) => f.type)).toEqual(['GHOST_METHOD']);
   });
 });
+
+describe('object literal returns checked against declared fields', () => {
+  async function run(iface: string, literal: string) {
+    const { analyzeDoubles } = await import('../../src/core/analyzer.js');
+    const { indexTsFile } = await import('../../src/extractors/ts/index.js');
+    const graph = emptyGraph();
+    await indexTsFile(
+      'src/svc.ts',
+      `${iface}\nexport class Svc { getUser(): User { return null as never; } }`,
+      graph,
+    );
+    return analyzeDoubles({
+      doubles: [
+        {
+          framework: 'vi.spyOn',
+          language: 'typescript',
+          file: 'tests/a.test.ts',
+          line: 3,
+          targetSymbol: 'Svc',
+          method: 'getUser',
+          methods: [{ name: 'getUser', line: 3 }],
+          withArity: null,
+          assertedArity: null,
+          returnTypeHint: null,
+          returnExpr: literal,
+          confidence: 'definite',
+        },
+      ],
+      graph,
+      fileLines: new Map([['tests/a.test.ts', ['', '', '', '']]]),
+      options: { strictness: 'all' },
+    });
+  }
+
+  const USER = 'export interface User { id: string; name: string; email?: string; }';
+
+  it('accepts a literal carrying every required field', async () => {
+    expect(await run(USER, "{ id: '1', name: 'a' }")).toEqual([]);
+    expect(await run(USER, "{ id: '1', name: 'a', email: 'e' }")).toEqual([]);
+  });
+
+  it('reports each missing required field separately', async () => {
+    // A mock returning `{ id }` where the code reads `.name` is a stale double
+    // that shape-level checking cannot see.
+    const found = await run(USER, "{ id: '1' }");
+    expect(found.map((f) => f.message)).toEqual([
+      "Stub returns an object missing required field 'name' of User.",
+    ]);
+  });
+
+  it('reports a field that does not exist, with a suggestion', async () => {
+    const found = await run(USER, "{ id: '1', name: 'a', emial: 'e' }");
+    const unknown = found.find((f) => f.message.includes('does not exist'));
+    expect(unknown?.confidence).toBe('warning');
+    expect(unknown?.suggestion).toBe('email');
+  });
+
+  it('says nothing when the literal spreads another value', async () => {
+    expect(await run(USER, "{ ...base, id: '1' }")).toEqual([]);
+  });
+
+  it('says nothing when the declared type has no known fields', async () => {
+    expect(await run('export type User = Record<string, string>;', "{ id: '1' }")).toEqual([]);
+  });
+});

@@ -74,3 +74,33 @@ describe('things that are not doubles', () => {
     expect(found.every((d) => d.targetSymbol !== 'Svc')).toBe(true);
   });
 });
+
+describe('members configured without spyOn', () => {
+  it('reads vi.mocked on a typed receiver', async () => {
+    const [d] = await doubles(`${PRELUDE}vi.mocked(s.load).mockReturnValue(1);`);
+    expect(d?.targetSymbol).toBe('Svc');
+    expect(d?.method).toBe('load');
+    expect(d?.returnExpr).toBe('1');
+  });
+
+  it('reads an assertion on a typed receiver', async () => {
+    const [d] = await doubles(`${PRELUDE}expect(s.load).toHaveBeenCalledWith(1, 2);`);
+    expect(d?.targetSymbol).toBe('Svc');
+    expect(d?.method).toBe('load');
+    expect(d?.assertedArity).toBe(2);
+  });
+
+  it('does not reach past the direct receiver', async () => {
+    // `s.inner.deep.mockReturnValue(1)` configures `deep` on whatever `inner`
+    // holds. Walking further found `inner` on Svc and called it a ghost.
+    const found = await doubles(`${PRELUDE}s.inner.deep.mockReturnValue(1);`);
+    expect(found.every((d) => d.method !== 'inner')).toBe(true);
+  });
+
+  it('ignores a receiver of unknown type', async () => {
+    const found = await doubles(
+      `import { vi } from 'vitest';\nvi.mocked(whatever.load).mockReturnValue(1);`,
+    );
+    expect(found).toEqual([]);
+  });
+});

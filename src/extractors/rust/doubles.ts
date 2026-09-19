@@ -42,7 +42,7 @@ export async function extractRustDoubles(relFile: string, source: string): Promi
         withArity: expectation.withArity,
         assertedArity: null,
         returnTypeHint: null,
-        returnExpr: null,
+        returnExpr: expectation.returnExpr,
         confidence: 'definite',
       });
       continue;
@@ -137,6 +137,7 @@ interface Expectation {
   trait: string;
   method: string;
   withArity: number | null;
+  returnExpr: string | null;
 }
 
 /**
@@ -159,7 +160,55 @@ function expectCall(node: SyntaxNode, mockVars: Map<string, string>): Expectatio
     mockConstructorTrait(receiver);
   if (!trait) return null;
 
-  return { trait, method, withArity: withArityOf(node) };
+  return {
+    trait,
+    method,
+    withArity: withArityOf(node),
+    returnExpr: returnValueOf(node),
+  };
+}
+
+/**
+ * The value a mockall expectation is configured to return.
+ *
+ * `return_const(v)` takes the value directly; `returning(|..| body)` takes a
+ * closure whose body is the value. Without this the Rust tier could report a
+ * ghost method or a bad arity but never a return type mismatch, because no
+ * return expression ever reached the analyzer.
+ */
+function returnValueOf(expectNode: SyntaxNode): string | null {
+  let current: SyntaxNode | null = expectNode;
+  for (let hops = 0; hops < 8 && current; hops++) {
+    const parent: SyntaxNode | null = current.parent;
+    if (!parent) return null;
+    if (parent.type === 'field_expression') {
+      const fieldName = field(parent, 'field')?.text ?? '';
+      const call: SyntaxNode | null = parent.parent;
+      if (call?.type === 'call_expression') {
+        const args = field(call, 'arguments');
+        const first = args?.namedChildren[0];
+        if (fieldName === 'return_const' && first) {
+          return stripNumericSuffix(first.text);
+        }
+        if ((fieldName === 'returning' || fieldName === 'return_once') && first) {
+          const body = first.type === 'closure_expression' ? field(first, 'body') : null;
+          if (body) return stripNumericSuffix(body.text);
+        }
+      }
+      current = call ?? parent;
+      continue;
+    }
+    current = parent;
+  }
+  return null;
+}
+
+/** `42u64` and `1.5f32` are the same literals as `42` and `1.5`. */
+function stripNumericSuffix(text: string): string {
+  const t = text.trim();
+  return /^-?\d+(\.\d+)?(_?[iuf](8|16|32|64|128|size))$/.test(t)
+    ? t.replace(/_?[iuf](8|16|32|64|128|size)$/, '')
+    : t;
 }
 
 /**

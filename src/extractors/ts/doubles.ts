@@ -19,7 +19,9 @@ interface SpyRecord {
   assertedArity: number | null;
 }
 
-function memberCall(node: SyntaxNode): { fn: SyntaxNode; property: string; argsNode: SyntaxNode | null } | null {
+function memberCall(
+  node: SyntaxNode,
+): { fn: SyntaxNode; property: string; argsNode: SyntaxNode | null } | null {
   if (node.type !== 'call_expression') return null;
   const fn = field(node, 'function');
   if (!fn || fn.type !== 'member_expression') return null;
@@ -63,7 +65,10 @@ function initTypeName(init: SyntaxNode): string | null {
 }
 
 /** Extract the production symbol a spy points to via the spy target arguments. */
-function spyTargetOf(spyCall: SyntaxNode, varTypes: Map<string, string>): { target: string | null; method: string | null } {
+function spyTargetOf(
+  spyCall: SyntaxNode,
+  varTypes: Map<string, string>,
+): { target: string | null; method: string | null } {
   const args = field(spyCall, 'arguments');
   if (!args) return { target: null, method: null };
   const children = args.namedChildren;
@@ -189,7 +194,8 @@ export async function extractTsDoubles(
 
     const obj = field(call.fn, 'object');
     const byVar = obj?.type === 'identifier' ? spyVars.get(obj.text) : undefined;
-    const rec = byVar ?? findOwningSpy(node, byCall, spyVars);
+    const rec =
+      byVar ?? findOwningSpy(node, byCall, spyVars) ?? adoptTypedMember(node, varTypes, spies);
     if (!rec) continue;
 
     if (isSetter) {
@@ -231,6 +237,69 @@ export async function extractTsDoubles(
   return { doubles };
 }
 
+/**
+ * Configure or assert on `receiver.method` where `receiver` has a known type
+ * but no `spyOn` was recorded, as in `expect(svc.load).toHaveBeenCalledWith(1)`
+ * or `vi.mocked(svc.load).mockReturnValue(1)`. Both are documented patterns
+ * that produced no double at all, because the chain walk only ever looked for
+ * a spy it had already seen.
+ */
+function adoptTypedMember(
+  node: SyntaxNode,
+  varTypes: Map<string, string>,
+  spies: SpyRecord[],
+): SpyRecord | null {
+  const fn = field(node, 'function');
+  if (fn?.type !== 'member_expression') return null;
+
+  // Only the direct receiver of the setter counts. Descending further finds
+  // the wrong member: in `controller.currentAction.getLoop.mockReturnValue(x)`
+  // the configured member is `getLoop` on whatever `currentAction` holds, not
+  // `currentAction` on the controller.
+  let receiver: SyntaxNode | null = field(fn, 'object');
+  for (let i = 0; i < 8 && receiver; i++) {
+    if (
+      receiver.type === 'parenthesized_expression' ||
+      receiver.type === 'as_expression' ||
+      receiver.type === 'assertion_expression' ||
+      receiver.type === 'await_expression' ||
+      receiver.type === 'non_null_expression'
+    ) {
+      receiver = receiver.namedChildren[0] ?? null;
+      continue;
+    }
+    if (receiver.type === 'call_expression') {
+      const text = field(receiver, 'function')?.text ?? '';
+      if (text === 'expect' || /^(vi|jest)\.mocked$/.test(text)) {
+        receiver = field(receiver, 'arguments')?.namedChildren[0] ?? null;
+        continue;
+      }
+      return null;
+    }
+    break;
+  }
+
+  if (receiver?.type !== 'member_expression') return null;
+  const base = field(receiver, 'object');
+  const property = field(receiver, 'property')?.text;
+  if (base?.type !== 'identifier' || !property) return null;
+
+  const target = varTypes.get(base.text);
+  if (!target) return null;
+
+  const rec: SpyRecord = {
+    framework: 'typed member',
+    target,
+    method: property,
+    line: receiver.startPosition.row + 1,
+    returnTypeHint: null,
+    returnExpr: null,
+    assertedArity: null,
+  };
+  spies.push(rec);
+  return rec;
+}
+
 /** Walk the member chain under `node` to find a spy we recorded. */
 function findOwningSpy(
   node: SyntaxNode,
@@ -239,17 +308,21 @@ function findOwningSpy(
 ): SpyRecord | null {
   let cur: SyntaxNode | null = node;
   for (let i = 0; i < 32 && cur; i++) {
-    if (cur.type === 'parenthesized_expression' || cur.type === 'as_expression' ||
-        cur.type === 'assertion_expression' || cur.type === 'await_expression' ||
-        cur.type === 'non_null_expression') {
+    if (
+      cur.type === 'parenthesized_expression' ||
+      cur.type === 'as_expression' ||
+      cur.type === 'assertion_expression' ||
+      cur.type === 'await_expression' ||
+      cur.type === 'non_null_expression'
+    ) {
       // Unwrap `(spy as any)`, `(spy)`, `await spy`, `spy!`
       cur = cur.namedChildren[0] ?? null;
       continue;
     }
     if (cur.type === 'call_expression') {
       const fnText = field(cur, 'function')?.text ?? '';
-      if (fnText === 'expect') {
-        // expect(spy).toHaveBeenCalledWith — receiver is inside expect(...)
+      // `expect(spy)` and `vi.mocked(fn)` both wrap the thing being configured.
+      if (fnText === 'expect' || /^(vi|jest)\.mocked$/.test(fnText)) {
         cur = field(cur, 'arguments')?.namedChildren[0] ?? null;
         continue;
       }

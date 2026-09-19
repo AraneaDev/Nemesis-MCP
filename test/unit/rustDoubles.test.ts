@@ -141,3 +141,46 @@ describe('supertraits', () => {
     expect(resolveType(graph, 'Multi', { language: 'rust' })?.extends).toEqual(['Base']);
   });
 });
+
+describe('mockall return values', () => {
+  it('reads return_const', async () => {
+    const found = await doubles(`
+      fn t() {
+        let mut m = MockRepo::new();
+        m.expect_find().return_const(42u32);
+      }
+    `);
+    expect(found[0]?.returnExpr).toBe('42');
+  });
+
+  it('reads the body of a returning closure', async () => {
+    const found = await doubles(`
+      fn t() {
+        let mut m = MockRepo::new();
+        m.expect_name().returning(|| "x".to_string());
+      }
+    `);
+    expect(found[0]?.returnExpr).toContain('"x"');
+  });
+
+  it('strips a numeric type suffix so the literal reads as a number', async () => {
+    // `42u64` and `42` are the same value; the suffix made it look nominal.
+    const found = await doubles(`
+      fn t() {
+        let mut m = MockClock::new();
+        m.expect_now().return_const(5i64);
+      }
+    `);
+    expect(found[0]?.returnExpr).toBe('5');
+  });
+
+  it('leaves the return unknown when nothing configures one', async () => {
+    const found = await doubles(`
+      fn t() {
+        let mut m = MockRepo::new();
+        m.expect_find().times(1);
+      }
+    `);
+    expect(found[0]?.returnExpr).toBeNull();
+  });
+});

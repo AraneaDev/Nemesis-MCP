@@ -10,6 +10,7 @@ import {
   resolveTarget,
   resolveType,
   resolveMember,
+  similarity,
   suggestMember,
 } from './symbolGraph.js';
 import { languageForFile } from './discovery.js';
@@ -84,6 +85,11 @@ function classify(d: TestDouble, graph: SymbolGraph, lines: string[]): Finding[]
     const real = resolvedMember?.method ?? null;
 
     // --- GHOST_METHOD -------------------------------------------------------
+    // A member declared as a property is not a missing method. Test suites
+    // legitimately stub a function held in a field, and a class that assigns
+    // `this.x = ...` in its constructor declares `x` as a field, not a method.
+    if (!real && owner.fields?.has(m.name)) continue;
+
     if (!real && !owner.unknownMembers.has(m.name)) {
       const suggestion = suggestMember(owner, m.name);
       // A member missing from a type whose ancestry runs outside the scanned
@@ -192,6 +198,12 @@ function classify(d: TestDouble, graph: SymbolGraph, lines: string[]): Finding[]
             message: `Stub returns '${stubType}' but ${owner.name}::${m.name} declares no return type, so the contract cannot be verified.`,
           });
         }
+      } else if (stubType && typesCompatible(stubType, declared, lang) && d.returnExpr !== null) {
+        // The value is compatible in shape. If it is an object literal and the
+        // declared type is one whose fields are known, the fields themselves
+        // can still be wrong: a mock returning `{ id }` where the code reads
+        // `.email` is a stale double that nothing else would catch.
+        findings.push(...structuralFieldFindings(d, m, owner, declared, graph, lines, lang));
       } else {
         if (stubType && !typesCompatible(stubType, declared, lang)) {
           // Two named types that simply differ may still be related by
@@ -493,7 +505,10 @@ export function analyzeDoubles(input: AnalyzeInput): Finding[] {
   }
   const seen = new Set<string>();
   const deduped = findings.filter((f) => {
-    const k = `${f.file}:${f.line}:${f.type}:${f.target}`;
+    // The message is part of the identity: several distinct findings can
+    // share a file, line, type and target, as when an object literal is
+    // missing more than one required field of the same type.
+    const k = `${f.file}:${f.line}:${f.type}:${f.target}:${f.message}`;
     if (seen.has(k)) return false;
     seen.add(k);
     return true;
@@ -517,3 +532,108 @@ export function groupByDir(findings: Finding[]): Map<string, Finding[]> {
 }
 
 export { languageForFile };
+
+/**
+ * Top-level keys of an object literal, or null when they cannot be known.
+ *
+ * A spread makes the key set open, and nothing useful can be said about a
+ * literal whose shape is assembled elsewhere.
+ */
+export function objectLiteralKeys(expr: string): string[] | null {
+  const t = expr.trim();
+  if (!t.startsWith('{') || !t.endsWith('}')) return null;
+  const body = t.slice(1, -1);
+  if (body.trim() === '') return [];
+  const keys: string[] = [];
+  for (const part of splitTopLevel(body, ',')) {
+    if (part.startsWith('...')) return null; // open shape
+    const colon = splitTopLevel(part, ':')[0] ?? part;
+    const raw = colon.trim();
+    // `{ id: 1 }`, `{ 'id': 1 }`, `{ id }`, `{ [k]: 1 }`
+    if (raw.startsWith('[')) return null; // computed key
+    const name = raw.replace(/^(['"`])(.*)\1$/, '$2').trim();
+    if (!/^[A-Za-z_$][\w$]*$/.test(name)) return null;
+    keys.push(name);
+  }
+  return keys;
+}
+
+/** Compare an object-literal return against the declared type's fields. */
+function structuralFieldFindings(
+  d: TestDouble,
+  m: { name: string; line: number },
+  owner: TypeSymbol,
+  declared: string,
+  graph: SymbolGraph,
+  lines: string[],
+  lang: string,
+): Finding[] {
+  if (suppressed(lines, m.line)) return [];
+  const keys = objectLiteralKeys(d.returnExpr ?? '');
+  if (keys === null) return [];
+
+  // Unwrap Promise<T> and friends, then require a single named type.
+  const alts = alternatives(declared);
+  if (alts.length !== 1) return [];
+  const canonical = canon(alts[0] ?? '');
+  if (canonical.kind !== 'nominal') return [];
+
+  const type = resolveType(graph, canonical.name ?? '', {
+    language: d.language,
+    fromFile: d.file,
+  });
+  if (!type?.fields || type.fields.size === 0) return [];
+  // A type that inherits from outside the scanned tree may declare more
+  // fields than we can see, so a missing one proves nothing.
+  if (hasUnresolvedAncestor(graph, type, { language: d.language, fromFile: d.file })) {
+    return [];
+  }
+
+  const present = new Set(keys);
+  const findings: Finding[] = [];
+  for (const [name, meta] of type.fields) {
+    if (meta.required && !present.has(name)) {
+      findings.push({
+        file: d.file,
+        line: m.line,
+        type: 'RETURN_DRIFT',
+        confidence: 'definite',
+        evidence: 'typed',
+        double_type: d.framework,
+        target: `${owner.name}::${m.name}`,
+        message: `Stub returns an object missing required field '${name}' of ${type.name}.`,
+      });
+    }
+  }
+  for (const key of keys) {
+    if (!type.fields.has(key)) {
+      const suggestion = nearestField(type, key);
+      findings.push({
+        file: d.file,
+        line: m.line,
+        type: 'RETURN_DRIFT',
+        confidence: 'warning',
+        evidence: 'heuristic',
+        double_type: d.framework,
+        target: `${owner.name}::${m.name}`,
+        message: `Stub returns an object with field '${key}', which does not exist on ${type.name}.${suggestion ? ` Did you mean '${suggestion}'?` : ''}`,
+        ...(suggestion ? { suggestion } : {}),
+      });
+    }
+  }
+  void lang;
+  return findings;
+}
+
+/** Closest declared field name, for a did-you-mean on a renamed field. */
+function nearestField(type: TypeSymbol, key: string): string | null {
+  let best: { name: string; d: number } | null = null;
+  for (const name of type.fields?.keys() ?? []) {
+    const distance = similarity(key, name);
+    const threshold = Math.max(2, Math.floor(key.length * 0.4));
+    if (distance <= threshold && (!best || distance < best.d)) {
+      best = { name, d: distance };
+    }
+  }
+  return best ? best.name : null;
+}
