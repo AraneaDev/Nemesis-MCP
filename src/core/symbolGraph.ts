@@ -103,14 +103,16 @@ export interface ResolveHint {
 
 function pickCandidate(candidates: TypeSymbol[], hint?: ResolveHint): TypeSymbol | null {
   if (candidates.length === 0) return null;
-  if (candidates.length === 1) return candidates[0] ?? null;
 
+  // The language filter runs even for a lone candidate. Skipping it there left
+  // a Python test patching `webhooks.is_private_url` resolving against
+  // `export type webhooks` in a generated TypeScript API file, and every
+  // function in that Python module was then reported as missing.
   let pool = candidates;
   const family = languageFamily(hint?.language ?? null);
   if (family !== null) {
     const sameFamily = pool.filter((c) => familyOfSymbol(c) === family);
-    // Never fall back across languages: a TypeScript test must not resolve
-    // against a same-named Python class.
+    // Never fall back across languages.
     if (sameFamily.length === 0) return null;
     pool = sameFamily;
   }
@@ -263,4 +265,34 @@ export function suggestMember(type: TypeSymbol, name: string): string | null {
     if (d <= threshold && (!best || d < best.d)) best = { name: candidate, d };
   }
   return best ? best.name : null;
+}
+
+/**
+ * True when a type names an ancestor the graph does not contain, so its full
+ * member set is unknowable. A Laravel model extends `Illuminate\...\Model`,
+ * a Symfony controller extends `AbstractController`, and those live in
+ * `vendor/`, which is never walked. Without this, every inherited framework
+ * method looked missing from the subclass.
+ */
+export function hasUnresolvedAncestor(
+  graph: SymbolGraph,
+  type: TypeSymbol,
+  hint?: ResolveHint,
+  depth = 0,
+  seen: Set<string> = new Set(),
+): boolean {
+  if (depth > MAX_DEPTH) return true;
+  if (seen.has(type.name)) return false;
+  seen.add(type.name);
+  const ownHint: ResolveHint = {
+    ...(hint?.language ? { language: hint.language } : {}),
+    fromFile: hint?.fromFile ?? type.file,
+  };
+  for (const name of [...type.extends, ...type.implements, ...type.uses]) {
+    const ancestor = resolveType(graph, name, ownHint);
+    if (!ancestor) return true;
+    if (ancestor === type) continue;
+    if (hasUnresolvedAncestor(graph, ancestor, ownHint, depth + 1, seen)) return true;
+  }
+  return false;
 }

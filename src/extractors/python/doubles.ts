@@ -17,10 +17,7 @@ function splitDottedTarget(dotted: string): { type: string; method: string | nul
   return { type, method };
 }
 
-export async function extractPythonDoubles(
-  relFile: string,
-  source: string,
-): Promise<TestDouble[]> {
+export async function extractPythonDoubles(relFile: string, source: string): Promise<TestDouble[]> {
   const doubles: TestDouble[] = [];
   const parsed = await parseSource('python', source);
   const { root } = parsed;
@@ -37,7 +34,12 @@ export async function extractPythonDoubles(
         const parts = left.text.split('.');
         const variable = parts[0];
         const method = parts[parts.length - 2];
-        const hit = variable ? (varMap.get(variable) ?? (specMap.has(variable) ? { target: specMap.get(variable)!.target, method: null } : undefined)) : undefined;
+        const hit = variable
+          ? (varMap.get(variable) ??
+            (specMap.has(variable)
+              ? { target: specMap.get(variable)!.target, method: null }
+              : undefined))
+          : undefined;
         if (hit && method) {
           doubles.push({
             framework: 'unittest.mock',
@@ -153,6 +155,12 @@ export async function extractPythonDoubles(
       continue;
     }
 
+    // An assignment such as `m = Mock(spec=Client)` is recorded by the
+    // assignment branch above; matching the call again here produced a second,
+    // identical double for the same mock.
+    const inAssignment =
+      node.parent?.type === 'assignment' && field(node.parent, 'right')?.id === node.id;
+
     // create_autospec(Type) / Mock(spec=Type) / MagicMock(spec_set=Type)
     if (/^create_autospec$/.test(fnText) && first) {
       if (first.type === 'identifier' || first.type === 'attribute') {
@@ -175,7 +183,7 @@ export async function extractPythonDoubles(
     }
     if (/^(Async)?Magic?Mock$|^(Async)?Mock$/.test(fnText)) {
       const spec = keywordValue(node, 'spec') ?? keywordValue(node, 'spec_set');
-      if (spec && (spec.type === 'identifier' || spec.type === 'attribute')) {
+      if (!inAssignment && spec && (spec.type === 'identifier' || spec.type === 'attribute')) {
         doubles.push({
           framework,
           language: 'python',
@@ -195,17 +203,34 @@ export async function extractPythonDoubles(
     }
 
     // assert_called_with / assert_called_once_with / assert_called_with on tracked mocks
-    if (/^assert_called(_once)?_with$|^assert_any_call$/.test(fn.type === 'attribute' ? (field(fn, 'attribute')?.text ?? '') : '')) {
+    if (
+      /^assert_called(_once)?_with$|^assert_any_call$/.test(
+        fn.type === 'attribute' ? (field(fn, 'attribute')?.text ?? '') : '',
+      )
+    ) {
       const attr = fn.type === 'attribute' ? field(fn, 'attribute')?.text : null;
       if (!attr) continue;
       const obj = fn.type === 'attribute' ? field(fn, 'object') : null;
       let hit: { target: string; method: string | null } | null = null;
-      if (obj?.type === 'attribute' || obj?.type === 'identifier' || obj?.type === 'subscript') {
-        const name = obj.type === 'identifier' ? obj.text : (obj.type === 'attribute' ? field(obj, 'attribute')?.text ?? null : null);
-        if (name) {
-          hit = varMap.get(name) ?? null;
-          if (!hit && specMap.has(name)) hit = { target: specMap.get(name)!.target, method: null };
-        }
+      const lookup = (
+        name: string,
+        method: string | null,
+      ): { target: string; method: string | null } | null => {
+        const tracked = varMap.get(name);
+        if (tracked) return { target: tracked.target, method: method ?? tracked.method };
+        const spec = specMap.get(name);
+        return spec ? { target: spec.target, method } : null;
+      };
+      if (obj?.type === 'attribute') {
+        // `m.login.assert_called_with(...)`: the mock is `m` and the method is
+        // `login`. Looking `login` up as if it were the mock variable found
+        // nothing, so the asserted argument count was silently dropped and no
+        // arity was ever checked through an assertion.
+        const base = field(obj, 'object');
+        const method = field(obj, 'attribute')?.text ?? null;
+        if (base?.type === 'identifier') hit = lookup(base.text, method);
+      } else if (obj?.type === 'identifier') {
+        hit = lookup(obj.text, null);
       }
       if (hit) {
         doubles.push({

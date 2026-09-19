@@ -5,7 +5,13 @@
 
 import path from 'node:path';
 import type { AnalyzeOptions, Finding, SymbolGraph, TestDouble, TypeSymbol } from './types.js';
-import { resolveTarget, resolveType, resolveMember, suggestMember } from './symbolGraph.js';
+import {
+  hasUnresolvedAncestor,
+  resolveTarget,
+  resolveType,
+  resolveMember,
+  suggestMember,
+} from './symbolGraph.js';
 import { languageForFile } from './discovery.js';
 
 const SUPPRESSION = /nemesis-ignore/i;
@@ -80,8 +86,15 @@ function classify(d: TestDouble, graph: SymbolGraph, lines: string[]): Finding[]
     // --- GHOST_METHOD -------------------------------------------------------
     if (!real && !owner.unknownMembers.has(m.name)) {
       const suggestion = suggestMember(owner, m.name);
-      const confidence =
-        owner.methods.size > 0 || owner.unknownMembers.size > 0 ? 'definite' : 'warning';
+      // A member missing from a type whose ancestry runs outside the scanned
+      // tree may simply be inherited from there, so it cannot be called a
+      // ghost with any confidence.
+      const partialAncestry = hasUnresolvedAncestor(graph, owner, {
+        language: lang,
+        fromFile: d.file,
+      });
+      const known = owner.methods.size > 0 || owner.unknownMembers.size > 0;
+      const confidence = known && !partialAncestry ? 'definite' : 'warning';
       if (!suppressed(lines, m.line)) {
         findings.push({
           file: d.file,

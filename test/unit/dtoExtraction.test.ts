@@ -8,7 +8,11 @@ import { indexTsFile } from '../../src/extractors/ts/index.js';
 describe('cross-language DTO field extraction', () => {
   it('extracts PHP properties', async () => {
     const graph = emptyGraph();
-    await indexPhpFile('src/User.php', `<?php class User { public string $name; protected int $age = 1; }`, graph);
+    await indexPhpFile(
+      'src/User.php',
+      `<?php class User { public string $name; protected int $age = 1; }`,
+      graph,
+    );
     const user = resolveType(graph, 'User');
     expect(user?.fields?.get('name')?.type).toBe('string');
     expect(user?.fields?.get('name')?.required).toBe(true);
@@ -17,7 +21,11 @@ describe('cross-language DTO field extraction', () => {
 
   it('extracts Python annotated and initialized attributes', async () => {
     const graph = emptyGraph();
-    await indexPythonFile('src/user.py', `class User:\n    name: str\n    age = 1\n    def load(self):\n        pass\n`, graph);
+    await indexPythonFile(
+      'src/user.py',
+      `class User:\n    name: str\n    age = 1\n    def load(self):\n        pass\n`,
+      graph,
+    );
     const user = resolveType(graph, 'User');
     expect(user?.fields?.get('name')?.type).toBe('str');
     expect(user?.fields?.get('age')?.required).toBe(false);

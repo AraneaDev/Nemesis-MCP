@@ -3,6 +3,7 @@ import {
   addFunction,
   addType,
   emptyGraph,
+  hasUnresolvedAncestor,
   resolveMember,
   resolveTarget,
   resolveType,
@@ -284,5 +285,113 @@ describe('python dotted patch targets', () => {
       fromFile: 'tests/InvoiceServiceTest.php',
     });
     expect(hit?.name).toBe('App\\Services\\InvoiceService');
+  });
+});
+
+describe('language guard for a lone candidate', () => {
+  function typed(file: string, name: string): TypeSymbol {
+    return {
+      name,
+      file,
+      kind: 'type_alias',
+      methods: new Map(),
+      unknownMembers: new Set(),
+      extends: [],
+      implements: [],
+      uses: [],
+      line: 1,
+    };
+  }
+
+  it('does not resolve across languages even when only one candidate exists', () => {
+    // Regression: the filter ran only when two or more candidates shared a
+    // name, so a Python test patching `webhooks.is_private_url` resolved
+    // against `export type webhooks` in a generated TypeScript API file, and
+    // every function in that Python module was reported missing.
+    const g = emptyGraph();
+    addType(g, typed('frontend/src/types/api.ts', 'webhooks'));
+    expect(
+      resolveType(g, 'webhooks', {
+        language: 'python',
+        fromFile: 'backend/tests/test_webhooks.py',
+      }),
+    ).toBeNull();
+  });
+
+  it('still resolves a lone candidate in the right language', () => {
+    const g = emptyGraph();
+    addType(g, typed('frontend/src/types/api.ts', 'webhooks'));
+    expect(
+      resolveType(g, 'webhooks', {
+        language: 'typescript',
+        fromFile: 'frontend/tests/api.test.ts',
+      })?.file,
+    ).toBe('frontend/src/types/api.ts');
+  });
+
+  it('resolves a lone candidate when no language is given', () => {
+    const g = emptyGraph();
+    addType(g, typed('src/a.ts', 'Thing'));
+    expect(resolveType(g, 'Thing')?.name).toBe('Thing');
+  });
+});
+
+describe('ancestry that runs outside the scanned tree', () => {
+  function cls(name: string, methods: string[], ext: string[] = []): TypeSymbol {
+    return {
+      name,
+      file: 'app/Models/' + name.split('\\').pop() + '.php',
+      kind: 'class',
+      methods: new Map(
+        methods.map((m) => [
+          m,
+          { name: m, returnType: null, params: [], visibility: 'public', line: 1 },
+        ]),
+      ),
+      unknownMembers: new Set(),
+      extends: ext,
+      implements: [],
+      uses: [],
+      line: 1,
+    };
+  }
+
+  it('detects a base class the graph does not contain', () => {
+    // A Laravel model extends Illuminate\Database\Eloquent\Model, which lives
+    // in vendor/ and is never walked, so `getAttribute` is not missing. It was
+    // reported as a definite ghost method.
+    const g = emptyGraph();
+    const model = cls(
+      'App\\Models\\ProviderCredential',
+      ['scopeActive'],
+      ['Illuminate\\Database\\Eloquent\\Model'],
+    );
+    addType(g, model);
+    expect(hasUnresolvedAncestor(g, model)).toBe(true);
+  });
+
+  it('reports a fully known ancestry as complete', () => {
+    const g = emptyGraph();
+    const base = cls('App\\Base', ['shared']);
+    const child = cls('App\\Child', ['own'], ['App\\Base']);
+    addType(g, base);
+    addType(g, child);
+    expect(hasUnresolvedAncestor(g, child)).toBe(false);
+  });
+
+  it('reports a type with no ancestry as complete', () => {
+    const g = emptyGraph();
+    const plain = cls('App\\Plain', ['a']);
+    addType(g, plain);
+    expect(hasUnresolvedAncestor(g, plain)).toBe(false);
+  });
+
+  it('survives a cycle in the ancestry', () => {
+    const g = emptyGraph();
+    addType(g, cls('App\\A', ['a'], ['App\\B']));
+    addType(g, cls('App\\B', ['b'], ['App\\A']));
+    const a = resolveType(g, 'App\\A');
+    expect(a).not.toBeNull();
+    expect(hasUnresolvedAncestor(g, a!)).toBe(false);
   });
 });

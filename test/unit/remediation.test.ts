@@ -23,30 +23,51 @@ describe('remediation regressions', () => {
 
   it('indexes methods from Rust impl blocks', async () => {
     const graph = emptyGraph();
-    await indexRustFile('src/service.rs', 'struct Service; impl Service { pub fn run(&self, x: u32) -> bool { true } }', graph);
+    await indexRustFile(
+      'src/service.rs',
+      'struct Service; impl Service { pub fn run(&self, x: u32) -> bool { true } }',
+      graph,
+    );
     const service = resolveType(graph, 'Service');
     expect(service?.methods.get('run')?.params).toHaveLength(1);
     expect(service?.methods.get('run')?.returnType).toBe('bool');
   });
 
   it('extracts configured methods from Python spec mocks', async () => {
-    const doubles = await extractPythonDoubles('tests/test_service.py', `
+    const doubles = await extractPythonDoubles(
+      'tests/test_service.py',
+      `
 from unittest.mock import Mock
 mock = Mock(spec=Service)
 mock.fetch.return_value = None
-`);
-    expect(doubles.some((double) => double.targetSymbol === 'Service' && double.method === 'fetch')).toBe(true);
+`,
+    );
+    expect(
+      doubles.some((double) => double.targetSymbol === 'Service' && double.method === 'fetch'),
+    ).toBe(true);
   });
 
   it('filters fixture strictness by explicit evidence', () => {
     const findings: Finding[] = [
       {
-        file: 'fixture.json', line: 1, type: 'GHOST_METHOD', confidence: 'warning',
-        evidence: 'heuristic', double_type: 'stale_fixture', target: 'User.name', message: 'heuristic',
+        file: 'fixture.json',
+        line: 1,
+        type: 'GHOST_METHOD',
+        confidence: 'warning',
+        evidence: 'heuristic',
+        double_type: 'stale_fixture',
+        target: 'User.name',
+        message: 'heuristic',
       },
       {
-        file: 'fixture.json', line: 1, type: 'RETURN_DRIFT', confidence: 'warning',
-        evidence: 'untyped', double_type: 'stale_fixture', target: 'User.username', message: 'untyped',
+        file: 'fixture.json',
+        line: 1,
+        type: 'RETURN_DRIFT',
+        confidence: 'warning',
+        evidence: 'untyped',
+        double_type: 'stale_fixture',
+        target: 'User.username',
+        message: 'untyped',
       },
     ];
     expect(filterFixtureFindings(findings, 'untyped_only')).toHaveLength(1);

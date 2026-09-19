@@ -117,10 +117,7 @@ function factoryOf(node: SyntaxNode | null): FactoryHit | null {
   return null;
 }
 
-export async function extractPhpDoubles(
-  relFile: string,
-  source: string,
-): Promise<TestDouble[]> {
+export async function extractPhpDoubles(relFile: string, source: string): Promise<TestDouble[]> {
   const doubles: TestDouble[] = [];
   const parsed = await parseSource('php', source);
   const { root } = parsed;
@@ -134,15 +131,21 @@ export async function extractPhpDoubles(
       const left = field(node, 'left');
       const right = field(node, 'right');
       if (left?.type === 'variable_name' && right) {
-        let factoryNode: SyntaxNode | null = right;
-        // Unwrap getMockBuilder(Foo::class)->...->getMock() chains.
-        if (right.type === 'member_call_expression') {
-          const name = field(right, 'name')?.text ?? '';
-          if (name === 'getMock') {
-            factoryNode = field(right, 'object');
-          }
+        // Descend the receiver chain to the factory at its root. Unwrapping a
+        // single `->getMock()` only covered the shortest possible builder;
+        // `getMockBuilder(X)->disableOriginalConstructor()->getMock()` and
+        // `Mockery::mock(X)->makePartial()` both put configurator calls in
+        // between, and neither was recognised as producing a double.
+        let hit: FactoryHit | null = null;
+        let cur: SyntaxNode | null = right;
+        for (let i = 0; i < 32 && cur; i++) {
+          hit = factoryOf(cur);
+          if (hit) break;
+          cur =
+            cur.type === 'member_call_expression' || cur.type === 'method_call_expression'
+              ? field(cur, 'object')
+              : null;
         }
-        const hit = factoryOf(factoryNode);
         if (hit) varMap.set(left.text, hit);
       }
       continue;

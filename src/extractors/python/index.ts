@@ -21,9 +21,20 @@ function paramsOf(node: SyntaxNode): ParamSymbol[] {
   if (!paramList) return params;
   for (const p of paramList.namedChildren) {
     if (p.type === 'identifier') {
-      params.push({ name: p.text, type: null, hasDefault: false, variadic: false });
-    } else if (p.type === 'default_parameter' || p.type === 'typed_parameter' || p.type === 'typed_default_parameter') {
-      const nameNode = field(p, 'name');
+      params.push({
+        name: p.text.split(/[:=]/)[0]?.trim() ?? p.text,
+        type: null,
+        hasDefault: false,
+        variadic: false,
+      });
+    } else if (
+      p.type === 'default_parameter' ||
+      p.type === 'typed_parameter' ||
+      p.type === 'typed_default_parameter'
+    ) {
+      // `typed_parameter` exposes no `name` field, so the annotation used to
+      // end up inside the parameter name.
+      const nameNode = field(p, 'name') ?? p.namedChildren.find((c) => c.type === 'identifier');
       const name = nameNode?.text.split(/[:=]/)[0]?.trim() ?? p.text;
       params.push({
         name,
@@ -40,15 +51,30 @@ function paramsOf(node: SyntaxNode): ParamSymbol[] {
   return params;
 }
 
-function fnFromNode(node: SyntaxNode): MethodSymbol | null {
+/**
+ * `self` and `cls` are bound by the call, not passed by the caller, so a
+ * method declared `def login(self, username)` takes one argument. Counting the
+ * receiver inverted every Python arity check: a correct two-argument
+ * assertion was reported as needing three, while a genuinely wrong
+ * three-argument one fitted inside the inflated maximum and passed.
+ */
+function dropReceiver(params: ParamSymbol[], isMethod: boolean): ParamSymbol[] {
+  if (!isMethod) return params;
+  const first = params[0];
+  if (first && !first.variadic && /^(self|cls|mcs)$/.test(first.name)) {
+    return params.slice(1);
+  }
+  return params;
+}
+
+function fnFromNode(node: SyntaxNode, isMethod = false): MethodSymbol | null {
   const name = field(node, 'name')?.text;
   if (!name) return null;
   return {
     name,
     returnType: typeTextOf(node, 'return_type'),
-    params: paramsOf(node),
-    visibility:
-      node.children.some((c) => !c.isNamed && c.text === 'async') ? 'public' : 'public',
+    params: dropReceiver(paramsOf(node), isMethod),
+    visibility: node.children.some((c) => !c.isNamed && c.text === 'async') ? 'public' : 'public',
     line: node.startPosition.row + 1,
   };
 }
@@ -93,7 +119,9 @@ export async function indexPythonFile(
         kind: 'class',
         methods: new Map(),
         unknownMembers: new Set(['__getattr__']),
-        ...(fieldsOfClassBody(field(node, 'body')) ? { fields: fieldsOfClassBody(field(node, 'body'))! } : {}),
+        ...(fieldsOfClassBody(field(node, 'body'))
+          ? { fields: fieldsOfClassBody(field(node, 'body'))! }
+          : {}),
         extends: [],
         implements: [],
         uses: [],
@@ -103,8 +131,17 @@ export async function indexPythonFile(
       if (body) {
         for (const n of body.namedChildren) {
           if (n.type === 'function_definition' || n.type === 'decorated_definition') {
-            const fnNode = n.type === 'decorated_definition' ? n.namedChildren.find((c) => c.type === 'function_definition') : n;
-            const m = fnNode ? fnFromNode(fnNode) : null;
+            const fnNode =
+              n.type === 'decorated_definition'
+                ? n.namedChildren.find((c) => c.type === 'function_definition')
+                : n;
+            // A @staticmethod takes no receiver, so nothing is dropped there.
+            const isStatic =
+              n.type === 'decorated_definition' &&
+              n.namedChildren.some(
+                (c) => c.type === 'decorator' && /\bstaticmethod\b/.test(c.text),
+              );
+            const m = fnNode ? fnFromNode(fnNode, !isStatic) : null;
             if (m) {
               m.visibility = pyVisibility(m.name);
               sym.methods.set(m.name, m);
@@ -125,7 +162,10 @@ export async function indexPythonFile(
     } else if (node.type === 'function_definition') {
       // Only top-level functions (parent is module root).
       const parent = node.parent;
-      if (parent && (parent.type === 'module' || parent.type === 'block' && parent.parent?.type === 'module')) {
+      if (
+        parent &&
+        (parent.type === 'module' || (parent.type === 'block' && parent.parent?.type === 'module'))
+      ) {
         const fn = fnFromNode(node);
         if (fn) addFunction(graph, fn);
       }
