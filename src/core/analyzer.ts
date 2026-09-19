@@ -599,6 +599,26 @@ function countDouble(d: TestDouble, graph: SymbolGraph, stats: AnalyzeStats): vo
     stats.noTarget += 1;
     return;
   }
+
+  // A module mock is compared against the module's export list rather than
+  // resolved as a type, so asking `resolveType` about its specifier would
+  // count every one of them as a gap. `classify` routes these to
+  // `moduleShapeFindings`, and this has to agree with it: a summary that
+  // contradicts the violations printed beside it is worse than no summary.
+  if (d.moduleSpecifier) {
+    if (!d.moduleSpecifier.startsWith('.')) {
+      // Not relative, so a package by construction. Nothing this scan owns.
+      stats.unknowable += 1;
+      return;
+    }
+    const scanned = resolveSpecifier(d.file, d.moduleSpecifier).some((candidate) =>
+      graph.exportsByFile.has(candidate),
+    );
+    if (scanned) stats.checked += 1;
+    else stats.unresolved += 1;
+    return;
+  }
+
   if (isUnknowableTarget(d.targetSymbol)) {
     stats.unknowable += 1;
     return;

@@ -38,11 +38,41 @@ function double(target: string | null, method: string | null): TestDouble {
   };
 }
 
+function moduleMock(specifier: string, file: string): TestDouble {
+  return {
+    framework: 'vi.mock',
+    language: 'typescript',
+    file,
+    line: 1,
+    targetSymbol: specifier,
+    method: null,
+    methods: [],
+    moduleSpecifier: specifier,
+    withArity: null,
+    assertedArity: null,
+    returnTypeHint: null,
+    returnExpr: null,
+    confidence: 'definite',
+  };
+}
+
 function statsFor(doubles: TestDouble[]): AnalyzeStats {
   const stats: AnalyzeStats = { checked: 0, unresolved: 0, unknowable: 0, noTarget: 0 };
   analyzeDoubles({
     doubles,
     graph: graphWithSvc(),
+    fileLines: new Map([['tests/a.test.ts', ['', '']]]),
+    options: { strictness: 'all', languages: [] },
+    stats,
+  });
+  return stats;
+}
+
+function statsForGraph(graph: SymbolGraph, doubles: TestDouble[]): AnalyzeStats {
+  const stats: AnalyzeStats = { checked: 0, unresolved: 0, unknowable: 0, noTarget: 0 };
+  analyzeDoubles({
+    doubles,
+    graph,
     fileLines: new Map([['tests/a.test.ts', ['', '']]]),
     options: { strictness: 'all', languages: [] },
     stats,
@@ -106,5 +136,31 @@ describe('what the analyzer reports having reached', () => {
       stats,
     });
     expect(found[0]?.type).toBe('GHOST_METHOD');
+  });
+
+  it('counts a module mock of a scanned file as checked', () => {
+    // `classify` compares this one against the module's export list, so the
+    // count has to say compared too.
+    const graph = graphWithSvc();
+    graph.exportsByFile.set('src/api.ts', new Set(['fetchUser']));
+    expect(statsForGraph(graph, [moduleMock('../src/api', 'tests/a.test.ts')]).checked).toBe(1);
+  });
+
+  it('counts a module mock of a package as unknowable', () => {
+    // `vi.mock('axios')` names something this scan does not own and never will.
+    expect(statsFor([moduleMock('axios', 'tests/a.test.ts')]).unknowable).toBe(1);
+  });
+
+  it('counts a module mock of a file it never read as unresolved', () => {
+    // Relative, so it is ours; absent, so it is a gap rather than a non-target.
+    expect(statsFor([moduleMock('../src/nowhere', 'tests/a.test.ts')]).unresolved).toBe(1);
+  });
+
+  it('counts a bare third-party root as unresolved, on purpose', () => {
+    // `patch("requests.get")` names a package, but a bare lowercase identifier
+    // is indistinguishable from a local test fake, and a local fake is a real
+    // gap. Overstating the gap is the honest direction, so this stays
+    // unresolved rather than being guessed into unknowable.
+    expect(statsFor([double('requests', 'get')]).unresolved).toBe(1);
   });
 });
