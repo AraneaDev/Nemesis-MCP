@@ -91,12 +91,28 @@ describe('a double whose target is no longer declared', () => {
     expect(run(renamed, 'Local', graphWith(KEPT))[0]?.message).toContain("'Removed'");
   });
 
-  it('ignores a binding that is not shaped like a type', () => {
+  it('ignores a binding that is not shaped like a type, without an export list', () => {
     // `export const sounds = new SoundManager()` is a value, absent from a
-    // graph of types while very much present in the file.
+    // graph of types while very much present in the file. With no export list
+    // for that file there is no way to tell the two apart.
     expect(run(['', "import { sounds } from '../src/svc';"], 'sounds', graphWith(KEPT))).toEqual(
       [],
     );
+  });
+
+  it('asks the export list about a value when the file has one', () => {
+    const g = graphWith(KEPT);
+    g.exportsByFile.set('src/svc.ts', new Set(['Kept', 'sounds']));
+    expect(run(['', "import { sounds } from '../src/svc';"], 'sounds', g)).toEqual([]);
+    const missing = run(['', "import { gone } from '../src/svc';"], 'gone', g);
+    expect(missing[0]?.message).toContain("'gone' is imported from '../src/svc'");
+  });
+
+  it('says nothing about a file that re-exports with a star', () => {
+    // Its names come from somewhere else, so its own list decides nothing.
+    const g = graphWith(KEPT);
+    g.exportsByFile.set('src/svc.ts', null);
+    expect(run(['', "import { anything } from '../src/svc';"], 'anything', g)).toEqual([]);
   });
 
   it('resolves a .js specifier to the TypeScript file it means', () => {
@@ -111,5 +127,43 @@ describe('a double whose target is no longer declared', () => {
       graphWith(typeIn('src/thing/index.ts', 'Kept')),
     );
     expect(found[0]?.message).toContain("'Removed'");
+  });
+});
+
+describe('the export list a module publishes', () => {
+  async function exportsOf(source: string): Promise<Set<string> | null | undefined> {
+    const { emptyGraph } = await import('../../src/core/symbolGraph.js');
+    const { indexTsFile } = await import('../../src/extractors/ts/index.js');
+    const g = emptyGraph();
+    await indexTsFile('src/mod.ts', source, g);
+    return g.exportsByFile.get('src/mod.ts');
+  }
+
+  it('collects declarations, values and renamed bindings', async () => {
+    const names = await exportsOf(
+      [
+        'export class A {}',
+        'export interface B {}',
+        'export enum C { x }',
+        'export type D = string;',
+        'export function f() {}',
+        'export const sounds = 1, other = 2;',
+        'const local = 1;',
+        'export { local as renamed };',
+        "export { thing } from './other';",
+        'export default class Z {}',
+      ].join('\n'),
+    );
+    expect([...(names ?? [])].sort()).toEqual(
+      ['A', 'B', 'C', 'D', 'Z', 'default', 'f', 'other', 'renamed', 'sounds', 'thing'].sort(),
+    );
+  });
+
+  it('gives up on a file that re-exports everything', async () => {
+    expect(await exportsOf("export * from './everything';\nexport const a = 1;")).toBeNull();
+  });
+
+  it('gives up on a destructured export, whose names it cannot list', async () => {
+    expect(await exportsOf('export const { a, b } = obj;')).toBeNull();
   });
 });

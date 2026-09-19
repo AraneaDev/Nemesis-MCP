@@ -78,6 +78,12 @@ export interface SymbolGraph {
   typeVariants: Map<string, TypeSymbol[]>;
   /** Free functions, lower-cased name → symbol. */
   functions: Map<string, MethodSymbol>;
+  /**
+   * Names each scanned TypeScript or JavaScript file exports. A file that
+   * re-exports with `export *` maps to null: its export list is not knowable
+   * from that file alone, so nothing is reported about it.
+   */
+  exportsByFile: Map<string, Set<string> | null>;
   /** Languages whose grammars failed to load; reported in the summary. */
   skippedLanguages: LanguageId[];
 }

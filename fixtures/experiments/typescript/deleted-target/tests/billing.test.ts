@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { Invoicer, LegacyInvoicer } from '../src/billing';
+import { Invoicer, LegacyInvoicer, issueInvoice, sendReminder } from '../src/billing';
 
 it('experiments with a double that outlived its class', () => {
   const legacy = new LegacyInvoicer();
@@ -8,4 +8,11 @@ it('experiments with a double that outlived its class', () => {
   const current = new Invoicer();
   vi.spyOn(current, 'issue').mockReturnValue(true);
   expect(current).not.toBeNull();
+});
+
+it('experiments with a double on a function that was renamed', () => {
+  // Lower case, so the graph of types never held it either way. The export
+  // list is what answers this one.
+  vi.spyOn(sendReminder, 'call');
+  expect(issueInvoice('1')).toBe(true);
 });

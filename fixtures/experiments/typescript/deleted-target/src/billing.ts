@@ -4,3 +4,7 @@ export class Invoicer {
     return amount > 0;
   }
 }
+
+export function issueInvoice(id: string): boolean {
+  return id !== '';
+}

@@ -10,6 +10,7 @@ export function emptyGraph(): SymbolGraph {
     types: new Map(),
     typeVariants: new Map(),
     functions: new Map(),
+    exportsByFile: new Map(),
     skippedLanguages: [],
   };
 }

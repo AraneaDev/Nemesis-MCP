@@ -83,7 +83,7 @@ function classify(
     resolveType(graph, d.targetSymbol, hint) ??
     (methodNames.length === 0 ? (resolveTarget(graph, d.targetSymbol, hint)?.type ?? null) : null);
   if (!type) {
-    const gone = importedButGone(d, lines, symbolsByFile);
+    const gone = importedButGone(d, lines, symbolsByFile, graph.exportsByFile);
     if (gone && !suppressed(lines, d.line)) {
       findings.push({
         file: d.file,
@@ -93,7 +93,7 @@ function classify(
         evidence: 'typed',
         double_type: d.framework,
         target: d.targetSymbol,
-        message: `'${gone.symbol}' is imported from '${gone.specifier}', which this scan read, and is not declared there any more.`,
+        message: `'${gone.symbol}' is imported from '${gone.specifier}', which this scan read, and is not exported there any more.`,
       });
     }
     return findings; // otherwise UNRESOLVED → skipped, never guessed
@@ -149,7 +149,12 @@ function classify(
     // PHPUnit is the other way round: it generates a subclass carrying only
     // the declared methods and refuses to configure anything else, so the same
     // stub really is broken there.
-    if (!real && lang === 'php' && MOCKERY_FRAMEWORKS.has(d.framework) && owner.methods.has('__call'))
+    if (
+      !real &&
+      lang === 'php' &&
+      MOCKERY_FRAMEWORKS.has(d.framework) &&
+      owner.methods.has('__call')
+    )
       continue;
 
     if (!real && !owner.unknownMembers.has(m.name)) {
@@ -1274,15 +1279,11 @@ function importedButGone(
   d: TestDouble,
   lines: string[],
   symbolsByFile: Map<string, Set<string>>,
+  exportsByFile: Map<string, Set<string> | null>,
 ): { symbol: string; specifier: string } | null {
   if (d.language !== 'typescript' && d.language !== 'javascript') return null;
   const wanted = (d.targetSymbol ?? '').split(/[\\.]/).pop() ?? '';
   if (!wanted) return null;
-  // Only a name shaped like a type. The graph holds types, so an `export
-  // const sounds = new SoundManager()` is absent from it while being very
-  // much present in the file, and reporting it would be wrong. A double
-  // pointing at a module object or an instance is unverifiable regardless.
-  if (!/^[A-Z]/.test(wanted)) return null;
 
   for (const line of lines) {
     const named = IMPORT_NAMED.exec(line);
@@ -1305,8 +1306,20 @@ function importedButGone(
     if (!exported) continue;
 
     for (const candidate of resolveSpecifier(d.file, specifier)) {
+      // The export list is the whole answer where the file has one: it covers
+      // functions and values as well as types, so a name of any shape can be
+      // asked about. A file that re-exports with `export *` maps to null,
+      // and names arriving from elsewhere are not this file's to account for.
+      if (exportsByFile.has(candidate)) {
+        const exports = exportsByFile.get(candidate);
+        if (!exports) return null;
+        return exports.has(exported) ? null : { symbol: exported, specifier };
+      }
       const names = symbolsByFile.get(candidate);
       if (!names || names.size === 0) continue; // never read, or holds no types
+      // Without an export list the graph holds types only, so a lower-case
+      // binding may be a value that is present and simply not a type.
+      if (!/^[A-Z]/.test(exported)) continue;
       if (names.has(exported)) return null; // still there under another route
       return { symbol: exported, specifier };
     }

@@ -87,6 +87,56 @@ interface TsDecl {
   line: number;
 }
 
+/**
+ * Every name a module exports, which is what an importer is entitled to ask
+ * for. Types alone were not enough: `export const sounds = new SoundManager()`
+ * is very much present in the file and absent from a graph of types, so a
+ * check reading that graph had to ignore anything not spelled like a class.
+ *
+ * `export * from './x'` puts names in the module that this file does not
+ * mention, so the list becomes null and nothing is reported about it.
+ */
+function recordExports(
+  relFile: string,
+  root: import('web-tree-sitter').Node,
+  graph: SymbolGraph,
+): void {
+  const names = new Set<string>();
+  let complete = true;
+  for (const statement of root.namedChildren) {
+    if (statement.type !== 'export_statement') continue;
+    const children = statement.namedChildren;
+    if (children.length === 0 || (children.length === 1 && children[0]?.type === 'string')) {
+      complete = false; // `export * from '...'`
+      continue;
+    }
+    if (statement.children.some((c) => !c.isNamed && c.text === 'default')) names.add('default');
+    for (const child of children) {
+      if (child.type === 'export_clause') {
+        for (const spec of child.namedChildren) {
+          if (spec.type !== 'export_specifier') continue;
+          // `a as b` is exported under `b`; that is the name an import asks for.
+          const exported = field(spec, 'alias') ?? field(spec, 'name');
+          if (exported) names.add(exported.text);
+        }
+      } else if (child.type === 'lexical_declaration' || child.type === 'variable_declaration') {
+        for (const declarator of child.namedChildren) {
+          if (declarator.type !== 'variable_declarator') continue;
+          const name = field(declarator, 'name');
+          // A destructured export names several bindings at once; the pattern
+          // is not one of them.
+          if (name?.type === 'identifier') names.add(name.text);
+          else if (name) complete = false;
+        }
+      } else {
+        const name = field(child, 'name');
+        if (name) names.add(name.text);
+      }
+    }
+  }
+  graph.exportsByFile.set(relFile, complete ? names : null);
+}
+
 export async function indexTsFile(
   relFile: string,
   source: string,
@@ -105,6 +155,8 @@ export async function indexTsFile(
     grammar,
   );
   const { root } = parsed;
+
+  recordExports(relFile, root, graph);
 
   // Pass 1: collect declarations (classes, interfaces, enums, aliases).
   const decls: TsDecl[] = [];
