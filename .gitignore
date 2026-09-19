@@ -26,3 +26,6 @@ docs/superpowers/
 # tool caches
 /.momus/
 /.superpowers/
+
+# audit and dogfood reports (working notes, not shipped docs)
+/docs/audits/

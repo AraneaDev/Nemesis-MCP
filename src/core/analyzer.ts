@@ -147,6 +147,7 @@ function classify(d: TestDouble, graph: SymbolGraph, lines: string[]): Finding[]
             line: m.line,
             type: 'ARITY_MISMATCH',
             confidence: 'definite',
+            evidence: 'typed',
             double_type: d.framework,
             target: `${owner.name}::${m.name}`,
             message: `Stub passes ${arity} argument(s) but '${owner.name}::${m.name}' accepts at most ${params.length}.`,
@@ -159,6 +160,7 @@ function classify(d: TestDouble, graph: SymbolGraph, lines: string[]): Finding[]
             line: m.line,
             type: 'ARITY_MISMATCH',
             confidence: 'definite',
+            evidence: 'typed',
             double_type: d.framework,
             target: `${owner.name}::${m.name}`,
             message: `Stub passes ${arity} argument(s) but '${owner.name}::${m.name}' requires ${required}.`,
@@ -170,22 +172,39 @@ function classify(d: TestDouble, graph: SymbolGraph, lines: string[]): Finding[]
     // --- RETURN_DRIFT -------------------------------------------------------
     if (d.returnTypeHint || d.returnExpr !== null) {
       const declared = real.returnType;
-      if (declared && !isUntypedSide(declared)) {
-        const stubType = d.returnTypeHint ?? inferType(d.returnExpr ?? '', lang);
+      const stubType = d.returnTypeHint ?? inferType(d.returnExpr ?? '', lang);
+
+      if (!declared || isUntypedSide(declared)) {
+        // The test pins a concrete return value against a method that declares
+        // no return type, so there is no contract to check it against. This is
+        // what `untyped_only` was meant to surface; the mode could not return
+        // anything before, because an untyped stub is treated as compatible
+        // and never reached a finding at all.
+        if (stubType && !isUntypedSide(stubType) && !suppressed(lines, m.line)) {
+          findings.push({
+            file: d.file,
+            line: m.line,
+            type: 'RETURN_DRIFT',
+            confidence: 'warning',
+            evidence: 'untyped',
+            double_type: d.framework,
+            target: `${owner.name}::${m.name}`,
+            message: `Stub returns '${stubType}' but ${owner.name}::${m.name} declares no return type, so the contract cannot be verified.`,
+          });
+        }
+      } else {
         if (stubType && !typesCompatible(stubType, declared, lang)) {
-          const untyped = isUntypedSide(stubType);
           // Two named types that simply differ may still be related by
           // inheritance, and the base class usually lives in a dependency
           // directory this tool never walks. Report it, but not as blocking.
           const unprovable = bothNominal(stubType, declared);
-          const heuristic = untyped || unprovable;
           if (!suppressed(lines, m.line)) {
             findings.push({
               file: d.file,
               line: m.line,
               type: 'RETURN_DRIFT',
-              confidence: heuristic ? 'warning' : 'definite',
-              evidence: untyped ? 'untyped' : unprovable ? 'heuristic' : 'typed',
+              confidence: unprovable ? 'warning' : 'definite',
+              evidence: unprovable ? 'heuristic' : 'typed',
               double_type: d.framework,
               target: `${owner.name}::${m.name}`,
               message: `Stub returns '${stubType}' but ${owner.name}::${m.name} returns '${declared}'.`,

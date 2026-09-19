@@ -13,15 +13,6 @@ export function* walk(node: SyntaxNode, depth = 0): Generator<{ node: SyntaxNode
   }
 }
 
-/** Collect all nodes of the given type(s). */
-export function findAll(root: SyntaxNode, ...types: string[]): SyntaxNode[] {
-  const out: SyntaxNode[] = [];
-  for (const { node } of walk(root)) {
-    if (types.includes(node.type)) out.push(node);
-  }
-  return out;
-}
-
 /** Strip surrounding quotes from a string literal's text. */
 export function unquote(text: string): string {
   const t = text.trim();
@@ -38,11 +29,6 @@ export function unquote(text: string): string {
 /** Child by field name, if any. */
 export function field(node: SyntaxNode, name: string): SyntaxNode | null {
   return node.childForFieldName(name);
-}
-
-/** True when the node (or its anonymous children) contain the exact token. */
-export function hasToken(node: SyntaxNode, token: string): boolean {
-  return node.children.some((c) => !c.isNamed && c.text === token);
 }
 
 /** Visibility token from a declaration's children, if any. */
@@ -68,5 +54,8 @@ export function visibilityOf(node: SyntaxNode): 'public' | 'protected' | 'privat
 export function typeTextOf(node: SyntaxNode, fieldName: string): string | null {
   const t = field(node, fieldName);
   if (!t) return null;
-  return t.text.replace(/^:\s*/, '').replace(/^->\s*/, '').trim();
+  return t.text
+    .replace(/^:\s*/, '')
+    .replace(/^->\s*/, '')
+    .trim();
 }

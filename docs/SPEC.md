@@ -146,8 +146,13 @@ can be checked and produces no finding at all.
 
 **Severity:** `breaking_only` = `GHOST_METHOD`, `ARITY_MISMATCH`,
 `RETURN_DRIFT`, `VISIBILITY_BREACH` (all exit-1 in CLI mode; hard-fail in CI).
-`untyped_only` = violations where the relevant side (stub value or production
-signature) is missing type information. `all` = everything, including
+`untyped_only` = violations where the relevant side is missing type
+information: a stub pins a concrete return value on a method that declares no
+return type, so there is no contract to check it against. These are always
+`warning` with `evidence: 'untyped'`. Before, the mode could not return
+anything at all from an audit, because an untyped stub is treated as
+compatible and never reached a finding. `all` is exactly `breaking_only` plus
+`untyped_only`, and every finding carries an `evidence` value. `all` = everything, including
 `UNRESOLVED`-adjacent soft warnings (naming-similarity hints).
 
 **Suppression:** inline `// nemesis-ignore` / `# nemesis-ignore` comment on the

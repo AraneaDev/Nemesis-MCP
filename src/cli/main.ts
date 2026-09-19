@@ -169,8 +169,23 @@ function warnAboutDiagnostics(diagnostics: ScanDiagnostic[]): void {
   }
 }
 
-async function run(args: CliArgs): Promise<number> {
-  const rootDir = process.cwd();
+/**
+ * Execute a parsed command. `rootDir` is a parameter rather than a read of
+ * `process.cwd()` so the commands can be driven in a test without a
+ * subprocess and without mutating the working directory.
+ */
+export async function run(args: CliArgs, rootDir = process.cwd()): Promise<number> {
+  try {
+    return await execute(args, rootDir);
+  } catch (err) {
+    console.error(
+      `nemesis: operational error: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return 2;
+  }
+}
+
+async function execute(args: CliArgs, rootDir: string): Promise<number> {
   const runtimeOpts = {
     rootDir,
     ...(args.positional.length || args.includes.length
@@ -302,14 +317,7 @@ async function main(): Promise<number> {
     return 0;
   }
 
-  try {
-    return await run(args);
-  } catch (err) {
-    console.error(
-      `nemesis: operational error: ${err instanceof Error ? err.message : String(err)}`,
-    );
-    return 2;
-  }
+  return run(args);
 }
 
 /**

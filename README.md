@@ -73,6 +73,11 @@ An unknown command, an unknown option, an invalid strictness and an unknown
 language are all errors. None of them is silently ignored, because a dropped
 `--strictness` typo is a scan that passes for the wrong reason.
 
+`untyped_only` reports the cases where nothing could be verified: a test pins a
+concrete return value on a method that declares no return type. That is common
+in plain JavaScript and in unannotated Python, so it is a `warning` and never
+blocks the default run. `all` is exactly `breaking_only` plus `untyped_only`.
+
 ### Exit codes
 
 | Code | Meaning |
