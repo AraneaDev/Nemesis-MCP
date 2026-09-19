@@ -1047,9 +1047,10 @@ function shapeOfReturnFindings(
   const declared = real.returnType?.trim() ?? '';
   const target = `${owner.name}::${m.name}`;
 
-  // `mockResolvedValue` hands back a promise. On a method that stopped being
-  // async the caller now receives a promise where it expects a value, and the
-  // types still line up because the lattice unwraps the promise.
+  // `mockResolvedValue` and `mockRejectedValue` both hand back a promise. On a
+  // method that stopped being async the caller now receives a promise where it
+  // expects a value, and the types still line up because the lattice unwraps
+  // the promise.
   if (d.resolvedReturn && declared && !isUntypedSide(declared)) {
     if (!AWAITABLE.test(declared) && !/^(any|unknown|mixed)$/i.test(declared)) {
       findings.push({
@@ -1060,7 +1061,7 @@ function shapeOfReturnFindings(
         evidence: 'typed',
         double_type: d.framework,
         target,
-        message: `Stub resolves a value but ${target} returns '${declared}', which is not awaitable.`,
+        message: `Stub hands back a promise but ${target} returns '${declared}', which is not awaitable.`,
       });
     }
   }

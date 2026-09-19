@@ -12,4 +12,13 @@ export class Feed {
   channel(): Channel {
     return Channel.Email;
   }
+
+  /** This used to throw asynchronously, and used to be fluent. */
+  retry(): boolean {
+    return true;
+  }
+
+  next(): string {
+    return '';
+  }
 }

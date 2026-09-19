@@ -22,6 +22,7 @@ interface SpyRecord {
   accessType?: string | null;
   fakeArity?: number | null;
   fakeParamTypes?: (string | null)[];
+  returnsSelf?: boolean;
   staticReceiver?: boolean | undefined;
 }
 
@@ -150,7 +151,8 @@ function literalType(expr: string | null): string | null {
   return null;
 }
 
-const RETURN_SETTERS = /^mock(ResolvedValue|ReturnValue|ResolvedValueOnce|ReturnValueOnce)$/;
+const RETURN_SETTERS =
+  /^mock(ResolvedValue|ReturnValue|RejectedValue|ResolvedValueOnce|ReturnValueOnce|RejectedValueOnce)$/;
 const ARITY_ASSERTIONS = /^(toHaveBeenCalledWith|toBeCalledWith)$/;
 const IMPLEMENTATIONS = /^mockImplementation(Once)?$/;
 
@@ -282,9 +284,10 @@ export async function extractTsDoubles(
     if (!call) continue;
 
     const isSetter = RETURN_SETTERS.test(call.property);
+    const isSelf = call.property === 'mockReturnThis';
     const isArity = ARITY_ASSERTIONS.test(call.property);
     const isFake = IMPLEMENTATIONS.test(call.property);
-    if (!isSetter && !isArity && !isFake) continue;
+    if (!isSetter && !isArity && !isFake && !isSelf) continue;
 
     const obj = field(call.fn, 'object');
     const byVar = obj?.type === 'identifier' ? spyVars.get(obj.text) : undefined;
@@ -292,7 +295,11 @@ export async function extractTsDoubles(
       byVar ?? findOwningSpy(node, byCall, spyVars) ?? adoptTypedMember(node, varTypes, spies);
     if (!rec) continue;
 
-    if (isFake) {
+    if (isSelf) {
+      // `mockReturnThis()` asserts the method is fluent, the same claim
+      // `willReturnSelf()` makes on the PHP side.
+      rec.returnsSelf = true;
+    } else if (isFake) {
       // A replacement function states, in code, what the test believes the
       // signature to be. Parameters it declares beyond the real ones are
       // always undefined, and the body's value stands in for the return.
@@ -309,11 +316,16 @@ export async function extractTsDoubles(
     } else if (isSetter) {
       const expr = call.argsNode?.namedChildren[0]?.text ?? null;
       const dt = declaredTypeOf(node);
-      rec.returnExpr = expr;
-      if (call.property.startsWith('mockResolvedValue')) {
+      if (call.property.startsWith('mockRejectedValue')) {
+        // The argument is the rejection reason, not a return value, but
+        // rejecting still asserts the method hands back a promise.
+        rec.resolvedReturn = true;
+      } else if (call.property.startsWith('mockResolvedValue')) {
+        rec.returnExpr = expr;
         rec.returnTypeHint = dt; // Promise<T> handled by the analyzer
         rec.resolvedReturn = true;
       } else {
+        rec.returnExpr = expr;
         rec.returnTypeHint = dt ?? literalType(expr);
       }
     } else {
@@ -379,6 +391,7 @@ export async function extractTsDoubles(
       returnExpr: rec.returnExpr,
       ...(rec.resolvedReturn ? { resolvedReturn: true } : {}),
       ...(rec.accessType ? { accessType: rec.accessType } : {}),
+      ...(rec.returnsSelf ? { returnsSelf: true } : {}),
       ...(rec.staticReceiver !== undefined ? { staticReceiver: rec.staticReceiver } : {}),
       confidence: rec.target ? 'definite' : 'warning',
     });

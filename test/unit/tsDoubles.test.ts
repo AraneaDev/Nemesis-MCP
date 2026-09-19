@@ -125,3 +125,18 @@ describe('static members', () => {
     expect(d?.targetSymbol).toBe('Svc');
   });
 });
+
+describe('the other two chain setters', () => {
+  it('reads a rejection as a promise, without taking the reason for a value', async () => {
+    const [d] = await doubles(
+      `${PRELUDE}vi.spyOn(s, 'load').mockRejectedValue(new Error('boom'));`,
+    );
+    expect(d?.resolvedReturn).toBe(true);
+    expect(d?.returnExpr).toBeNull();
+  });
+
+  it('reads mockReturnThis as the fluency claim it is', async () => {
+    const [d] = await doubles(`${PRELUDE}vi.spyOn(s, 'load').mockReturnThis();`);
+    expect(d?.returnsSelf).toBe(true);
+  });
+});

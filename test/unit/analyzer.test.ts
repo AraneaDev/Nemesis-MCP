@@ -538,7 +538,7 @@ describe('contracts about the shape of a call', () => {
       // else here notices that the caller now receives one.
       const found = await tsRun(SRC, { method: 'sync', resolvedReturn: true });
       expect(found.map((f) => f.message)).toContain(
-        "Stub resolves a value but Svc::sync returns 'string', which is not awaitable.",
+        "Stub hands back a promise but Svc::sync returns 'string', which is not awaitable.",
       );
     });
 
