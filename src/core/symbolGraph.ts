@@ -11,6 +11,7 @@ export function emptyGraph(): SymbolGraph {
     typeVariants: new Map(),
     functions: new Map(),
     exportsByFile: new Map(),
+    modules: new Map(),
     skippedLanguages: [],
   };
 }
@@ -62,6 +63,10 @@ export function addType(graph: SymbolGraph, symbol: TypeSymbol): void {
 
 export function addFunction(graph: SymbolGraph, fn: MethodSymbol): void {
   graph.functions.set(key(fn.name), fn);
+}
+
+export function addModule(graph: SymbolGraph, module: TypeSymbol): void {
+  graph.modules.set(module.file, module);
 }
 
 /** Max ancestor hops when following extends/implements/uses. */
