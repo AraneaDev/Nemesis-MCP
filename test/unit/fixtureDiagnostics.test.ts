@@ -62,3 +62,27 @@ describe('fixture to DTO matching', () => {
     }
   }, 120_000);
 });
+
+describe('fixture field types', () => {
+  it('reports a value whose type does not match the declared field', async () => {
+    // Only presence was ever checked, so `"id": 1` sat happily against
+    // `id: string` and the fixture looked current.
+    const result = await checkFixtures(root, ['fixtures/fixtures-typed']);
+    expect(result.scanned).toBe(1);
+    const messages = result.violations.map((v) => v.message);
+    expect(messages).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("has 'id' as int but ShipmentRecord declares 'string'"),
+        expect.stringContaining("has 'weight' as string but ShipmentRecord declares 'number'"),
+        expect.stringContaining("has 'express' as string but ShipmentRecord declares 'boolean'"),
+      ]),
+    );
+  }, 120_000);
+
+  it('accepts a record whose values match', async () => {
+    const result = await checkFixtures(root, ['fixtures/fixtures-typed']);
+    // The first record in the fixture is correct, so every finding names the
+    // second one's fields rather than both.
+    expect(result.violations).toHaveLength(3);
+  }, 120_000);
+});

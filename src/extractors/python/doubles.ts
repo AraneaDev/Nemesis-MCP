@@ -242,6 +242,7 @@ export async function extractPythonDoubles(relFile: string, source: string): Pro
           method: hit.method,
           methods: hit.method ? [{ name: hit.method, line: node.startPosition.row + 1 }] : [],
           withArity: null,
+          ...(argsNode.length > 0 ? { withArgs: argsNode.map((a) => a.text) } : {}),
           assertedArity: argsNode.length,
           returnTypeHint: null,
           returnExpr: null,

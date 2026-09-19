@@ -625,3 +625,77 @@ describe('contracts about the shape of a call', () => {
     });
   });
 });
+
+describe('named and keyword arguments', () => {
+  async function run(signature: string, args: string[], lang: 'php' | 'python' = 'php') {
+    const { analyzeDoubles } = await import('../../src/core/analyzer.js');
+    const graph = emptyGraph();
+    if (lang === 'php') {
+      const { indexPhpFile } = await import('../../src/extractors/php/index.js');
+      await indexPhpFile('src/G.php', `<?php namespace App; class Gateway { ${signature} }`, graph);
+    } else {
+      const { indexPythonFile } = await import('../../src/extractors/python/index.js');
+      await indexPythonFile('src/g.py', `class Gateway:\n    ${signature}\n`, graph);
+    }
+    return analyzeDoubles({
+      doubles: [
+        {
+          framework: 'double',
+          language: lang,
+          file: 'tests/t',
+          line: 3,
+          targetSymbol: lang === 'php' ? 'App\\Gateway' : 'Gateway',
+          method: 'charge',
+          methods: [{ name: 'charge', line: 3 }],
+          withArity: args.length,
+          withArgs: args,
+          assertedArity: null,
+          returnTypeHint: null,
+          returnExpr: null,
+          confidence: 'definite',
+        },
+      ],
+      graph,
+      fileLines: new Map([['tests/t', ['', '', '', '']]]),
+      options: { strictness: 'all' },
+    });
+  }
+
+  const PHP = 'public function charge(int $amount, string $currency): bool {}';
+  const PY = 'def charge(self, amount: int, currency: str) -> bool: pass';
+
+  it('accepts names that match the parameters', async () => {
+    expect(await run(PHP, ['amount: 5', "currency: 'eur'"])).toEqual([]);
+    expect(await run(PY, ['amount=5', "currency='eur'"], 'python')).toEqual([]);
+  });
+
+  it('reports a name that matches no parameter', async () => {
+    // A renamed parameter leaves the keyword pointing at nothing, and the
+    // argument count is still right so nothing else notices.
+    const found = await run(PHP, ['cents: 5', "currency: 'eur'"]);
+    expect(found.map((f) => f.message)).toEqual([
+      "Argument named 'cents' does not match any parameter of App\\Gateway::charge.",
+    ]);
+  });
+
+  it('suggests the parameter a near-miss was meant to be', async () => {
+    const found = await run(PHP, ['ammount: 5', "currency: 'eur'"]);
+    expect(found[0]?.suggestion).toBe('amount');
+  });
+
+  it('reports a python keyword the same way', async () => {
+    const found = await run(PY, ["user='u'", "currency='eur'"], 'python');
+    expect(found[0]?.message).toContain("Argument named 'user'");
+  });
+
+  it('says nothing when the method takes a variadic', async () => {
+    // Any keyword could land in the variadic, so no name can be ruled out.
+    expect(await run('public function charge(...$args) {}', ['cents: 5'])).toEqual([]);
+  });
+
+  it('does not treat a positional literal as a name', async () => {
+    // `'eur'` and `5` carry no name; they go through the positional check.
+    const found = await run(PHP, ['5', "'eur'"]);
+    expect(found.filter((f) => f.message.startsWith('Argument named'))).toEqual([]);
+  });
+});

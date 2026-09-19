@@ -15,6 +15,7 @@ import { indexPythonFile } from '../extractors/python/index.js';
 import { indexRustFile } from '../extractors/rust/index.js';
 import { similarity } from '../core/symbolGraph.js';
 import { passesStrictness } from '../core/policy.js';
+import { isUntypedSide, typesCompatible } from '../core/analyzer.js';
 
 const FIXTURE_EXTS = new Set(['.json', '.yaml', '.yml']);
 
@@ -362,6 +363,24 @@ export async function checkFixtures(
     const records = recordsOf(data, dto);
     for (const rec of records) {
       for (const [field, meta] of dto.fields) {
+        // A field that is present but holds the wrong kind of value is as
+        // stale as one that is missing, and only presence was ever checked:
+        // `"id": 1` sat happily against `id: string`.
+        if (field in rec && meta.type && !isUntypedSide(meta.type)) {
+          const actual = jsonKind(rec[field]);
+          if (actual && !typesCompatible(actual, meta.type, languageOf(dto.file) ?? 'typescript')) {
+            violations.push({
+              file: rel,
+              line: 1,
+              type: 'RETURN_DRIFT',
+              confidence: 'definite',
+              evidence: 'typed',
+              double_type: 'stale_fixture',
+              target: `${dto.name}.${field}`,
+              message: `Fixture '${path.basename(rel)}' has '${field}' as ${actual} but ${dto.name} declares '${meta.type}'.`,
+            });
+          }
+        }
         if (meta.required && !(field in rec)) {
           const suggestion = suggestField(rec, field, dto.fields);
           violations.push({
@@ -578,3 +597,21 @@ function suggestFieldKey(
 }
 
 export { resolveType };
+
+/** The lattice name for a parsed JSON or YAML value. */
+function jsonKind(value: unknown): string | null {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return 'list';
+  switch (typeof value) {
+    case 'string':
+      return 'string';
+    case 'number':
+      return Number.isInteger(value) ? 'int' : 'float';
+    case 'boolean':
+      return 'bool';
+    case 'object':
+      return 'dict';
+    default:
+      return null;
+  }
+}

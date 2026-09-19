@@ -48,7 +48,7 @@ function isDynamicName(name: string): boolean {
   return !/^[A-Za-z_][A-Za-z0-9_]*$/.test(n);
 }
 
-function isUntypedSide(type: string | null | undefined): boolean {
+export function isUntypedSide(type: string | null | undefined): boolean {
   if (!type) return true;
   const t = type.trim();
   return t === '' || /^(mixed|any|unknown)$/i.test(t);
@@ -733,11 +733,38 @@ function argumentTypeFindings(
   const args = d.withArgs;
   if (!args || args.length === 0) return [];
   if (suppressed(lines, m.line)) return [];
-  // A named argument is not positional, so the index says nothing about which
-  // parameter it fills.
-  if (args.some((a) => /^[A-Za-z_$][\w$]*\s*:/.test(a.trim()))) return [];
-
   const findings: Finding[] = [];
+  const declaredNames = new Set(
+    real.params.map((p) => p.name.replace(/^[$*]+/, '').trim()).filter(Boolean),
+  );
+
+  // A named argument carries the parameter's name, so a rename leaves it
+  // pointing at nothing. It also makes position meaningless, so once one
+  // appears only the names are checked.
+  const named = args
+    .map((a) => NAMED_ARGUMENT.exec(a.trim()))
+    .filter((m): m is RegExpExecArray => m !== null);
+  if (named.length > 0) {
+    if (real.params.some((p) => p.variadic) || declaredNames.size === 0) return [];
+    for (const match of named) {
+      const key = match[1] ?? '';
+      if (declaredNames.has(key)) continue;
+      const suggestion = nearestName(key, declaredNames);
+      findings.push({
+        file: d.file,
+        line: m.line,
+        type: 'ARITY_MISMATCH',
+        confidence: 'definite',
+        evidence: 'typed',
+        double_type: d.framework,
+        target: `${owner.name}::${m.name}`,
+        message: `Argument named '${key}' does not match any parameter of ${owner.name}::${m.name}.${suggestion ? ` Did you mean '${suggestion}'?` : ''}`,
+        ...(suggestion ? { suggestion } : {}),
+      });
+    }
+    return findings;
+  }
+
   for (const [index, argument] of args.entries()) {
     const param = real.params[index];
     if (!param || param.variadic) break;
@@ -874,4 +901,20 @@ function missingEnumMember(
     }
   }
   return { written, enumName: type.name, member, suggestion };
+}
+
+/** `name: value` in PHP, `name=value` in Python. */
+const NAMED_ARGUMENT = /^([A-Za-z_][\w]*)\s*(?::(?!:)|=(?!=))\s*\S/;
+
+/** Closest declared name, for a did-you-mean on a renamed parameter. */
+function nearestName(key: string, candidates: Set<string>): string | null {
+  let best: { name: string; d: number } | null = null;
+  for (const candidate of candidates) {
+    const distance = similarity(key, candidate);
+    const threshold = Math.max(2, Math.floor(key.length * 0.4));
+    if (distance <= threshold && (!best || distance < best.d)) {
+      best = { name: candidate, d: distance };
+    }
+  }
+  return best ? best.name : null;
 }

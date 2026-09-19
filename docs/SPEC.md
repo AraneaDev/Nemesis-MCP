@@ -65,6 +65,11 @@ match needs at least three shared fields covering ≥60% of the fixture's keys
 and ≥50% of the DTO's fields. Name signals come from the file name and from
 top-level keys whose value actually holds records.
 
+Fields that are present are compared by type as well as by name: a JSON or
+YAML value is reduced to the same lattice the analyzer uses, so `"id": 1`
+against `id: string` is reported. Only fields the DTO declares a type for are
+compared.
+
 An unmatched fixture is counted in `unmatched_fixtures`, and an unparsable one
 is listed in `unparsable_fixtures`. Neither makes the scan partial.
 
@@ -140,6 +145,13 @@ is listed in `unparsable_fixtures`. Neither makes the scan partial.
      longer has. A renamed case still parses and still type-checks against the
      enum, so nothing else here would notice. Enum members are indexed for
      both PHP and TypeScript.
+
+   A named or keyword argument carries the parameter's name, so renaming a
+   parameter leaves it pointing at nothing while the argument count stays
+   right. Those names are checked against the declared parameters, with a
+   did-you-mean, and the check stands down when the method takes a variadic,
+   since any keyword could land there. Once a named argument appears, position
+   carries no meaning and only the names are checked.
 
    The arguments themselves are compared too, where both sides are knowable:
    a literal passed to `with(...)` or `toHaveBeenCalledWith(...)` is checked

@@ -18,7 +18,7 @@ classes/interfaces/traits. No tests are executed; results are deterministic.
 | Type | Meaning |
 | --- | --- |
 | `GHOST_METHOD` | The double stubs a method that no longer exists on the target (includes "Did you mean …?" suggestions). |
-| `ARITY_MISMATCH` | The double passes more arguments than the method accepts, omits required ones, or passes a literal of the wrong type for a declared parameter. |
+| `ARITY_MISMATCH` | The double passes more arguments than the method accepts, omits required ones, passes a literal of the wrong type for a declared parameter, or names an argument that matches no parameter. |
 | `RETURN_DRIFT` | The stubbed return value cannot satisfy the declared return type. Covers an object literal missing a required field or carrying one that no longer exists, an enum case the enum no longer has, a resolved value on a method that is not awaitable, and `willReturnSelf` on a method that is not fluent. |
 | `VISIBILITY_BREACH` | The double stubs a member it cannot legitimately replace: a `private`/`protected` method, a `final` method, a `final` class, or a `static` method reached through an instance double. |
 
@@ -114,7 +114,8 @@ Three tools:
    `strictness?`, `exclude?`. Returns the report plus
    `summary: { doubles, invalid }` so an agent can branch without counting.
 3. **`nemesis_stale_fixtures`** — check JSON/YAML fixtures against current
-   DTO shapes (missing/renamed/removed fields). Strictness filtering is shared
+   DTO shapes (missing/renamed/removed fields, and fields whose value is the
+   wrong type). Strictness filtering is shared
    with the CLI and supports `all`, `untyped_only`, and `breaking_only`.
    Params: `paths?`, `strictness?`. Returns `unmatched_fixtures` alongside
    `scanned_fixtures`, plus `unparsable_fixtures` when any fixture-shaped file
