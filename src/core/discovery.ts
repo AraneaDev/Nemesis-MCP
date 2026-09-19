@@ -2,7 +2,7 @@
 // File discovery: classify repo files into test files vs production files.
 // ---------------------------------------------------------------------------
 
-import { readdir } from 'node:fs/promises';
+import { readdir, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { LanguageId, ScanDiagnostic } from './types.js';
 import { isExcluded, loadIgnoreFile } from './ignore.js';
@@ -70,7 +70,24 @@ export async function discoverFiles(
   const exts = opts.extensions ?? Object.keys(EXT_TO_LANG);
   const patterns = opts.respectGitignore === false ? [] : loadIgnoreFile(rootDir);
 
-  async function walk(dir: string): Promise<void> {
+  // Real paths already walked, so a symlink that points back up the tree ends
+  // the descent instead of looping forever. A tree with no symlinks in it
+  // cannot contain a cycle, so the resolution only happens once one has been
+  // crossed and the common case pays nothing.
+  const visited = new Set<string>();
+
+  async function walk(dir: string, viaSymlink = false): Promise<void> {
+    if (viaSymlink) {
+      let real: string;
+      try {
+        real = await realpath(dir);
+      } catch {
+        real = path.resolve(dir);
+      }
+      if (visited.has(real)) return;
+      visited.add(real);
+    }
+
     let entries;
     try {
       entries = await readdir(dir, { withFileTypes: true });
@@ -86,10 +103,29 @@ export async function discoverFiles(
     for (const entry of entries) {
       const abs = path.join(dir, entry.name);
       const rel = path.relative(rootDir, abs).split(path.sep).join('/');
-      if (entry.isDirectory()) {
+
+      let isDir = entry.isDirectory();
+      let isFile = entry.isFile();
+      const isLink = entry.isSymbolicLink();
+      if (isLink) {
+        // A symlinked directory used to be neither a directory nor a file to
+        // the walk, so it was dropped without a word. A repository that
+        // symlinks its source tree, which pnpm workspaces and many monorepo
+        // layouts do, had that source silently missing from the graph and
+        // every double pointing into it quietly went unchecked.
+        try {
+          const target = await stat(abs);
+          isDir = target.isDirectory();
+          isFile = target.isFile();
+        } catch {
+          continue; // broken symlink
+        }
+      }
+
+      if (isDir) {
         if (isExcluded(rel, opts.extraExcludes, patterns, true)) continue;
-        await walk(abs);
-      } else if (entry.isFile()) {
+        await walk(abs, viaSymlink || isLink);
+      } else if (isFile) {
         const lang = languageForFile(entry.name);
         if (!lang || !exts.includes(path.extname(entry.name))) continue;
         if (isExcluded(rel, opts.extraExcludes, patterns, false)) continue;

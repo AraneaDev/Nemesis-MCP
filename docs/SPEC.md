@@ -46,7 +46,7 @@ the analysis is purely syntactic and semantic-lite.
 | TypeScript/JS | Vitest, Jest | `vi.spyOn`, `jest.spyOn`, `vi.fn()`, `jest.fn()`, `mockReturnValue`, `mockResolvedValue`, `mockImplementation`, inline object stubs, `as Foo` / `: Foo` casts | tree-sitter (typescript/tsx/javascript) | interfaces, type aliases, classes, methods, functions, enums |
 | PHP | PHPUnit, Pest, Mockery | `createMock()`, `createStub()`, `$this->mock()`, `Mockery::mock()`, `expects($this->once())->method('x')`, `->method(...)->willReturn(...)`, `->method(...)->willReturnMap(...)`, `->method(...)->willReturnCallback(...)`, magic `->method('name')` method chains | tree-sitter-php | classes, interfaces, traits, enums, methods with param/return types |
 | Python | pytest-mock, unittest.mock | `mocker.patch(...)`, `patch(...)`, `mock.patch.object(...)`, `patch.object(...)`, `Mock(spec=X)`, `create_autospec(X)`, `unittest.mock.Mock(spec_set=...)` | tree-sitter-python | classes, methods, functions |
-| Rust | mockall, mockiato | `#[automock]` on traits, `mock! { }` blocks, double-vs-trait contract verification | tree-sitter-rust | traits, fns, structs, enums, impls |
+| Rust | mockall | `MockFoo::new()` / `MockFoo::default()` bound to a variable or used inline, `expect_<method>()` expectations, arity from `.with(...)` (one predicate per parameter), `#[automock]` traits and `mock! { }` blocks | tree-sitter-rust | traits, fns, structs, enums, impls |
 
 Fixture checking (tool 3) inspects JSON and YAML fixtures against production
 DTO/class/record shapes. Field extraction covers TypeScript interfaces,
@@ -202,6 +202,10 @@ Scans the repo (or given paths) for double drift.
   match wins). Nested `.gitignore` files are not consulted. This keeps
   generated trees and linked git worktrees out of the scan, which otherwise
   report the same drift twice.
+- Follows symlinked directories, resolving real paths to end a loop. A tree
+  containing no symlinks pays nothing for this. Source reachable only through
+  a link would otherwise be absent from the graph, and the doubles pointing
+  into it would be reported as clean rather than unresolved.
 - Honors `--exclude` overrides.
 
 ### 7.1 Symbol resolution

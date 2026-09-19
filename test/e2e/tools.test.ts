@@ -100,3 +100,38 @@ describe('nemesis fixtures end-to-end', () => {
     );
   }, 120_000);
 });
+
+describe('audit and verify-symbol agree', () => {
+  it('reports the same findings through both commands', () => {
+    // The two commands share an analyzer but not a code path into it. If they
+    // ever disagree, one of them is lying about the state of the repository.
+    const audit = runCli(['audit', 'fixtures', '--strictness=all', '--json'], root);
+    const violations = JSON.parse(audit.stdout).violations as Array<{
+      file: string;
+      line: number;
+      type: string;
+      target: string;
+    }>;
+    expect(violations.length).toBeGreaterThan(0);
+
+    const key = (v: { file: string; line: number; type: string; target: string }) =>
+      `${v.file}:${v.line}:${v.type}:${v.target}`;
+    const fromAudit = new Set(violations.map(key));
+    const symbols = [...new Set(violations.map((v) => v.target.split('::')[0]))];
+
+    const fromVerify = new Set<string>();
+    for (const symbol of symbols) {
+      const out = runCli(['verify-symbol', symbol as string, '--strictness=all', '--json'], root);
+      const report = JSON.parse(out.stdout) as {
+        resolved: boolean;
+        doubles: Array<{ violations: typeof violations }>;
+      };
+      expect(report.resolved).toBe(true);
+      for (const double of report.doubles) {
+        for (const v of double.violations) fromVerify.add(key(v));
+      }
+    }
+
+    expect([...fromVerify].sort()).toEqual([...fromAudit].sort());
+  }, 300_000);
+});

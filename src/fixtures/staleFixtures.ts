@@ -2,7 +2,7 @@
 // nemesis_stale_fixtures: check JSON/YAML fixtures against production DTO shapes.
 // ---------------------------------------------------------------------------
 
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { readFile, readdir, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import type { Finding, ScanDiagnostic, Strictness, SymbolGraph } from '../core/types.js';
@@ -405,8 +405,17 @@ async function collectFixtureFiles(
   paths: string[],
   diagnostics: ScanDiagnostic[],
   ignorePatterns: IgnorePattern[],
+  visited: Set<string> = new Set(),
 ): Promise<void> {
   const dir = path.join(rootDir, rel);
+  let real: string;
+  try {
+    real = await realpath(dir);
+  } catch {
+    real = path.resolve(dir);
+  }
+  if (visited.has(real)) return;
+  visited.add(real);
   let entries;
   try {
     entries = await readdir(dir, { withFileTypes: true });
@@ -421,13 +430,33 @@ async function collectFixtureFiles(
   }
   for (const entry of entries) {
     const relEntry = rel ? `${rel}/${entry.name}` : entry.name;
-    if (entry.isDirectory()) {
+    let isDir = entry.isDirectory();
+    let isFile = entry.isFile();
+    if (entry.isSymbolicLink()) {
+      try {
+        const target = await stat(path.join(rootDir, relEntry));
+        isDir = target.isDirectory();
+        isFile = target.isFile();
+      } catch {
+        continue; // broken symlink
+      }
+    }
+    if (isDir) {
       // This walk used to carry its own four-name exclusion list, so it
       // descended into .mypy_cache, .pnpm-store, coverage and linked
       // worktrees and called every file in them a fixture.
       if (isExcluded(relEntry, [], ignorePatterns, true)) continue;
-      await collectFixtureFiles(rootDir, relEntry, out, paths, diagnostics, ignorePatterns);
+      await collectFixtureFiles(
+        rootDir,
+        relEntry,
+        out,
+        paths,
+        diagnostics,
+        ignorePatterns,
+        visited,
+      );
     } else if (
+      isFile &&
       FIXTURE_EXTS.has(path.extname(entry.name)) &&
       !isExcluded(relEntry, [], ignorePatterns, false) &&
       // An explicitly requested path is taken at its word; otherwise only

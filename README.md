@@ -41,7 +41,7 @@ entirely.
 | TypeScript / JS | Vitest, Jest | `vi.spyOn` / `jest.spyOn`, `mockReturnValue`, `mockResolvedValue`, `toHaveBeenCalledWith`, `toHaveBeenCalledTimes` |
 | PHP | PHPUnit, Pest, Mockery | `createMock`, `createStub`, `getMockBuilder()->getMock()`, `expects()->method()`, `with()`, `willReturn*`, `Mockery::mock`, `shouldReceive`, `andReturn*`, Pest `mock()` / `spy()` |
 | Python | pytest-mock, unittest.mock | `mocker.patch`, `patch`, `patch.object`, `create_autospec`, `Mock(spec=X)`, `return_value=`, `assert_called_with` |
-| Rust | mockall | `#[automock]`, `mock! { }` (experimental tier) |
+| Rust | mockall | `MockFoo::new()` / `MockFoo::default()` with `expect_<method>()`, arity from `.with(...)`, plus `#[automock]` and `mock! { }` declarations |
 
 ## Install & Run
 
@@ -180,6 +180,12 @@ Test roots: `tests/`, `test/`, `spec/`, `__tests__/`, `*.spec.*`, `*.test.*`,
 `*Test.php`, `test_*.py`, `tests/*.rs`, … Everything else with a known source
 extension is production code. `node_modules`, `vendor`, `dist`, `build`,
 `target`, etc. are always skipped.
+
+Symlinked directories are followed, because a repository that reaches its
+source through a link (pnpm workspaces, many monorepo layouts) would otherwise
+have that source missing from the graph and every double pointing into it
+silently unchecked. A symlink that loops back up the tree ends the descent
+rather than the process.
 
 The repository's own `.gitignore` is honoured as well, so generated trees
 (`var/cache/`, `build-electrobun/`, a linked `.worktrees/` checkout, a vendored
