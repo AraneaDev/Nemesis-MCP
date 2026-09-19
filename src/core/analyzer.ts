@@ -217,6 +217,21 @@ function classify(
     // stub of one is configuration that never takes effect. Both are a
     // contract the test believes in and the runtime does not.
     if (lang === 'php' && !suppressed(lines, m.line)) {
+      // PHPUnit builds its double by subclassing and disabling the original
+      // constructor, so a stub of one of these is configuration that the
+      // framework never consults.
+      if (UNSTUBBABLE_PHP_MEMBERS.has(m.name)) {
+        findings.push({
+          file: d.file,
+          line: m.line,
+          type: 'VISIBILITY_BREACH',
+          confidence: 'definite',
+          evidence: 'typed',
+          double_type: d.framework,
+          target: `${owner.name}::${m.name}`,
+          message: `'${m.name}' cannot be stubbed on a double of '${owner.name}'; the framework never routes through it.`,
+        });
+      }
       const modifiers = real.modifiers ?? [];
       if (modifiers.includes('final')) {
         findings.push({
@@ -250,6 +265,23 @@ function classify(
     // `expect.any(String)` is passed over rather than guessed at.
     for (const finding of argumentTypeFindings(d, m, owner, real, lines, lang)) {
       findings.push(finding);
+    }
+
+    // --- ACCESSORS ----------------------------------------------------------
+    // Spying on a getter or setter needs the access type; without it the
+    // framework looks for a function, finds a property, and throws.
+    const accessor = real.modifiers?.find((x) => x === 'get' || x === 'set');
+    if (accessor && !d.accessType && !suppressed(lines, m.line)) {
+      findings.push({
+        file: d.file,
+        line: m.line,
+        type: 'VISIBILITY_BREACH',
+        confidence: 'definite',
+        evidence: 'typed',
+        double_type: d.framework,
+        target: `${owner.name}::${m.name}`,
+        message: `'${m.name}' is a ${accessor === 'get' ? 'getter' : 'setter'} on '${owner.name}', so spying on it needs an access type such as '${accessor}'.`,
+      });
     }
 
     // --- ASYNC AND FLUENT CONTRACTS -----------------------------------------
@@ -918,3 +950,6 @@ function nearestName(key: string, candidates: Set<string>): string | null {
   }
   return best ? best.name : null;
 }
+
+/** PHP members a mocking framework cannot route through. */
+const UNSTUBBABLE_PHP_MEMBERS = new Set(['__construct', '__destruct', '__clone']);

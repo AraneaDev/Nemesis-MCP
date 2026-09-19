@@ -699,3 +699,99 @@ describe('named and keyword arguments', () => {
     expect(found.filter((f) => f.message.startsWith('Argument named'))).toEqual([]);
   });
 });
+
+describe('accessors and members a framework cannot route through', () => {
+  async function tsRun(source: string, method: string, accessType?: string) {
+    const { analyzeDoubles } = await import('../../src/core/analyzer.js');
+    const { indexTsFile } = await import('../../src/extractors/ts/index.js');
+    const graph = emptyGraph();
+    await indexTsFile('src/svc.ts', source, graph);
+    return analyzeDoubles({
+      doubles: [
+        {
+          framework: 'vi.spyOn',
+          language: 'typescript',
+          file: 'tests/a.test.ts',
+          line: 3,
+          targetSymbol: 'Svc',
+          method,
+          methods: [{ name: method, line: 3 }],
+          withArity: null,
+          assertedArity: null,
+          returnTypeHint: null,
+          returnExpr: null,
+          confidence: 'definite',
+          ...(accessType ? { accessType } : {}),
+        },
+      ],
+      graph,
+      fileLines: new Map([['tests/a.test.ts', ['', '', '', '']]]),
+      options: { strictness: 'all' },
+    });
+  }
+
+  const ACCESSORS =
+    'export class Svc { get label(): string { return "x"; } set label(v: string) {} run(): boolean { return true; } }';
+
+  it('reports spying on a getter without an access type', async () => {
+    const found = await tsRun(ACCESSORS, 'label');
+    expect(found.map((f) => f.message)).toContain(
+      "'label' is a getter on 'Svc', so spying on it needs an access type such as 'get'.",
+    );
+  });
+
+  it('accepts the spy when the access type is given', async () => {
+    expect(await tsRun(ACCESSORS, 'label', 'get')).toEqual([]);
+  });
+
+  it('says nothing about an ordinary method', async () => {
+    expect(await tsRun(ACCESSORS, 'run')).toEqual([]);
+  });
+
+  it('prefers the getter over the setter of the same name', async () => {
+    // The setter's single parameter was being read as the member's arity.
+    const { indexTsFile } = await import('../../src/extractors/ts/index.js');
+    const { resolveType } = await import('../../src/core/symbolGraph.js');
+    const graph = emptyGraph();
+    await indexTsFile('src/svc.ts', ACCESSORS, graph);
+    const label = resolveType(graph, 'Svc', { language: 'typescript' })?.methods.get('label');
+    expect(label?.params).toHaveLength(0);
+    expect(label?.returnType).toBe('string');
+    expect(label?.modifiers).toEqual(['get']);
+  });
+
+  it('reports a stubbed PHP constructor', async () => {
+    const { analyzeDoubles } = await import('../../src/core/analyzer.js');
+    const { indexPhpFile } = await import('../../src/extractors/php/index.js');
+    const graph = emptyGraph();
+    await indexPhpFile(
+      'src/G.php',
+      '<?php namespace App; class Gateway { public function __construct(string $k) {} }',
+      graph,
+    );
+    const found = analyzeDoubles({
+      doubles: [
+        {
+          framework: 'PHPUnit_MockObject',
+          language: 'php',
+          file: 'tests/GTest.php',
+          line: 3,
+          targetSymbol: 'App\\Gateway',
+          method: '__construct',
+          methods: [{ name: '__construct', line: 3 }],
+          withArity: null,
+          assertedArity: null,
+          returnTypeHint: null,
+          returnExpr: null,
+          confidence: 'definite',
+        },
+      ],
+      graph,
+      fileLines: new Map([['tests/GTest.php', ['', '', '', '']]]),
+      options: { strictness: 'all' },
+    });
+    expect(found.map((f) => f.message)).toContain(
+      "'__construct' cannot be stubbed on a double of 'App\\Gateway'; the framework never routes through it.",
+    );
+  });
+});

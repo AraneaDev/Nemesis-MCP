@@ -247,12 +247,23 @@ function enumCases(node: SyntaxNode): Map<string, FieldSymbol> {
     if (child.type !== 'enum_case') continue;
     const name = field(child, 'name')?.text ?? child.namedChildren[0]?.text;
     if (name) {
+      // A backed enum's case values are what a fixture actually carries.
+      const literal = child.namedChildren.find(
+        (c) => c.type === 'string' || c.type === 'encapsed_string' || c.type === 'integer',
+      );
       cases.set(name, {
         name,
         type: null,
         required: true,
+        ...(literal ? { value: unquotePhp(literal.text) } : {}),
       });
     }
   }
   return cases;
+}
+
+/** Strip the quotes PHP wraps a string literal in. */
+function unquotePhp(text: string): string {
+  const t = text.trim();
+  return /^(['"]).*\1$/s.test(t) ? t.slice(1, -1) : t;
 }

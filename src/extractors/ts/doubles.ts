@@ -19,6 +19,7 @@ interface SpyRecord {
   assertedArity: number | null;
   assertedArgs?: string[];
   resolvedReturn?: boolean;
+  accessType?: string | null;
 }
 
 function memberCall(
@@ -70,12 +71,12 @@ function initTypeName(init: SyntaxNode): string | null {
 function spyTargetOf(
   spyCall: SyntaxNode,
   varTypes: Map<string, string>,
-): { target: string | null; method: string | null } {
+): { target: string | null; method: string | null; accessType: string | null } {
   const args = field(spyCall, 'arguments');
-  if (!args) return { target: null, method: null };
+  if (!args) return { target: null, method: null, accessType: null };
   const children = args.namedChildren;
   const first = children[0];
-  if (!first) return { target: null, method: null };
+  if (!first) return { target: null, method: null, accessType: null };
   let target: string | null = null;
   if (first.type === 'identifier') {
     // A tracked variable names its type; anything else is taken at face value,
@@ -89,7 +90,10 @@ function spyTargetOf(
   }
   const second = children[1];
   const method = second ? unquote(second.text) : null;
-  return { target, method };
+  // `vi.spyOn(obj, 'x', 'get')` replaces the accessor rather than a method.
+  const third = children[2];
+  const accessType = third ? unquote(third.text) : null;
+  return { target, method, accessType };
 }
 
 /** Declared type from `as Foo` / `: Foo` around `node` (walks outward). */
@@ -164,11 +168,12 @@ export async function extractTsDoubles(
     if (!call || call.property !== 'spyOn') continue;
     const rootName = apiRoot(call);
     if (!rootName) continue;
-    const { target, method } = spyTargetOf(node, varTypes);
+    const { target, method, accessType } = spyTargetOf(node, varTypes);
     const rec: SpyRecord = {
       framework: `${rootName}.spyOn`,
       target,
       method,
+      accessType,
       line: node.startPosition.row + 1,
       returnTypeHint: null,
       returnExpr: null,
@@ -239,6 +244,7 @@ export async function extractTsDoubles(
       returnTypeHint: rec.returnTypeHint,
       returnExpr: rec.returnExpr,
       ...(rec.resolvedReturn ? { resolvedReturn: true } : {}),
+      ...(rec.accessType ? { accessType: rec.accessType } : {}),
       confidence: rec.target ? 'definite' : 'warning',
     });
   }

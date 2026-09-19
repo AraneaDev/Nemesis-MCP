@@ -16,6 +16,8 @@ final class SealedTest extends TestCase
         $partly = $this->createMock(Partly::class);
         $partly->method('locked')->willReturn(true);
         $partly->method('build')->willReturn(null);
+        // A constructor is never routed through a double.
+        $partly->method('__construct')->willReturn(null);
 
         $this->assertNotNull($sealed);
     }

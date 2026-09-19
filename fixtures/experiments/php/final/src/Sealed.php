@@ -13,6 +13,10 @@ final class Sealed
 
 class Partly
 {
+    public function __construct(private string $key = 'k')
+    {
+    }
+
     final public function locked(): bool
     {
         return true;

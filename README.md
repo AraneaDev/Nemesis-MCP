@@ -20,7 +20,7 @@ classes/interfaces/traits. No tests are executed; results are deterministic.
 | `GHOST_METHOD` | The double stubs a method that no longer exists on the target (includes "Did you mean …?" suggestions). |
 | `ARITY_MISMATCH` | The double passes more arguments than the method accepts, omits required ones, passes a literal of the wrong type for a declared parameter, or names an argument that matches no parameter. |
 | `RETURN_DRIFT` | The stubbed return value cannot satisfy the declared return type. Covers an object literal missing a required field or carrying one that no longer exists, an enum case the enum no longer has, a resolved value on a method that is not awaitable, and `willReturnSelf` on a method that is not fluent. |
-| `VISIBILITY_BREACH` | The double stubs a member it cannot legitimately replace: a `private`/`protected` method, a `final` method, a `final` class, or a `static` method reached through an instance double. |
+| `VISIBILITY_BREACH` | The double stubs a member it cannot legitimately replace: a `private`/`protected` method, a `final` method, a `final` class, a `static` method reached through an instance double, an accessor spied without an access type, or a PHP constructor. |
 
 Findings carry a confidence: `definite` (block-worthy) or `warning`
 (heuristic, e.g. dynamic targets).

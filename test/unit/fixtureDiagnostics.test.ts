@@ -86,3 +86,21 @@ describe('fixture field types', () => {
     expect(result.violations).toHaveLength(3);
   }, 120_000);
 });
+
+describe('enum-typed fixture fields', () => {
+  it('accepts a value that is a case of the enum', async () => {
+    const result = await checkFixtures(root, ['fixtures/fixtures-enum']);
+    expect(result.scanned).toBe(1);
+    expect(result.unmatched).toBe(0);
+    expect(result.violations.filter((v) => v.message.includes('"fast"'))).toEqual([]);
+  }, 120_000);
+
+  it('reports a value that is not a case of the enum', async () => {
+    // A string is the right shape for a backed enum, so comparing kinds says
+    // nothing; what matters is whether the value is still one of the cases.
+    const result = await checkFixtures(root, ['fixtures/fixtures-enum']);
+    expect(result.violations.map((v) => v.message)).toEqual([
+      expect.stringContaining('has \'lane\' as "express", which is not a case of'),
+    ]);
+  }, 120_000);
+});

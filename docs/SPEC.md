@@ -70,6 +70,13 @@ YAML value is reduced to the same lattice the analyzer uses, so `"id": 1`
 against `id: string` is reported. Only fields the DTO declares a type for are
 compared.
 
+A field typed as a backed enum is checked against the enum's case values
+rather than by kind, because a string is the right shape for one whatever it
+says. Enum backing values are indexed for both PHP and TypeScript, and the
+finding carries a did-you-mean. Enums are never candidates for matching a
+fixture to a DTO, since no fixture is an enum and a `Lane` enum beside a
+`LaneRecord` would otherwise tie and match neither.
+
 An unmatched fixture is counted in `unmatched_fixtures`, and an unparsable one
 is listed in `unparsable_fixtures`. Neither makes the scan partial.
 
@@ -186,6 +193,15 @@ is listed in `unparsable_fixtures`. Neither makes the scan partial.
    - A `static` method is not intercepted by an instance double, so stubbing
      one is configuration that never takes effect. Reported as a `warning`,
      since the double itself is still valid.
+
+   - A getter or setter is not a function, so spying on one needs an access
+     type (`vi.spyOn(obj, 'x', 'get')`). Without it the framework looks for a
+     function, finds a property, and throws. A getter and setter sharing a
+     name are recorded as one member, and the getter wins, since it describes
+     what reading the member yields.
+   - `__construct`, `__destruct` and `__clone` cannot be stubbed on a PHP
+     double: the framework subclasses the target and disables the original
+     constructor, so it never routes through them.
 
    Python has no access control, so a single leading underscore yields
    `warning`; only a name-mangled `__member` is `definite`.

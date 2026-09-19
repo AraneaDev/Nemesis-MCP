@@ -66,6 +66,8 @@ export interface FieldSymbol {
   name: string;
   type: string | null;
   required: boolean;
+  /** Literal value, for an enum case with a backing value. */
+  value?: string;
 }
 
 /** The production symbol graph for a scan. */
@@ -107,6 +109,8 @@ export interface TestDouble {
   resolvedReturn?: boolean;
   /** The stub is configured to return the mock itself (`willReturnSelf`). */
   returnsSelf?: boolean;
+  /** `vi.spyOn(obj, 'x', 'get')`: the accessor the spy replaces, if given. */
+  accessType?: string;
   confidence: Confidence;
 }
 

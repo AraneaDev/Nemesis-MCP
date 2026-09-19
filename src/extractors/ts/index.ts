@@ -222,13 +222,25 @@ export async function indexTsFile(
           if (param) params.push(param);
         }
       }
+      // `get x()` and `set x(v)` are accessors, not methods. Recording them
+      // as ordinary members hid two things: spying on one needs an access
+      // type, and a setter's single parameter was being read as the member's
+      // arity when both halves shared a name.
+      const accessor = n.children.find(
+        (c) => !c.isNamed && (c.text === 'get' || c.text === 'set'),
+      )?.text;
       const sym: MethodSymbol = {
         name,
         returnType: typeTextOf(n, 'return_type'),
         params,
         visibility: visibilityOf(n),
         line: n.startPosition.row + 1,
+        ...(accessor ? { modifiers: [accessor] } : {}),
       };
+      // A getter describes what reading the member yields, which is what a
+      // stub replaces, so it wins over the setter of the same name.
+      const existing = typeSym.methods.get(name);
+      if (existing?.modifiers?.includes('get') && accessor === 'set') continue;
       typeSym.methods.set(name, sym);
     }
 
@@ -308,12 +320,21 @@ function enumMembers(node: import('web-tree-sitter').Node): Map<string, FieldSym
           ? child.text
           : null;
     if (name) {
+      const literal =
+        child.type === 'enum_assignment' ? (field(child, 'value') ?? child.namedChildren[1]) : null;
       members.set(name, {
         name,
         type: null,
         required: true,
+        ...(literal ? { value: unquoteTs(literal.text) } : {}),
       });
     }
   }
   return members;
+}
+
+/** Strip the quotes around a TypeScript string literal. */
+function unquoteTs(text: string): string {
+  const t = text.trim();
+  return /^(['"`])[\s\S]*\1$/.test(t) ? t.slice(1, -1) : t;
 }

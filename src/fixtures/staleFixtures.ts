@@ -200,9 +200,13 @@ interface DtoLike {
 function collectDtoLikes(graph: SymbolGraph): DtoLike[] {
   const out: DtoLike[] = [];
   for (const t of graph.types.values()) {
+    // An enum's "fields" are its cases, not a record shape, and no fixture is
+    // ever an enum. Treating them as candidates made `Lane` tie with
+    // `LaneRecord` beside it, which is an ordinary way to write those two, and
+    // the tie meant the record matched nothing at all.
+    if (t.kind === 'enum') continue;
     if (t.fields && t.fields.size > 0) {
       out.push({ name: t.name, fields: t.fields, file: t.file });
-      continue;
     }
   }
   return out;
@@ -368,7 +372,24 @@ export async function checkFixtures(
         // `"id": 1` sat happily against `id: string`.
         if (field in rec && meta.type && !isUntypedSide(meta.type)) {
           const actual = jsonKind(rec[field]);
-          if (actual && !typesCompatible(actual, meta.type, languageOf(dto.file) ?? 'typescript')) {
+          const enumHit = enumValueCheck(graph, meta.type, rec[field], dto);
+          if (enumHit) {
+            violations.push({
+              file: rel,
+              line: 1,
+              type: 'RETURN_DRIFT',
+              confidence: 'definite',
+              evidence: 'typed',
+              double_type: 'stale_fixture',
+              target: `${dto.name}.${field}`,
+              message: `Fixture '${path.basename(rel)}' has '${field}' as ${JSON.stringify(rec[field])}, which is not a case of ${enumHit.enumName}.${enumHit.suggestion ? ` Did you mean ${JSON.stringify(enumHit.suggestion)}?` : ''}`,
+            });
+          } else if (
+            !enumHit &&
+            !isEnumTyped(graph, meta.type, dto) &&
+            actual &&
+            !typesCompatible(actual, meta.type, languageOf(dto.file) ?? 'typescript')
+          ) {
             violations.push({
               file: rel,
               line: 1,
@@ -614,4 +635,56 @@ function jsonKind(value: unknown): string | null {
     default:
       return null;
   }
+}
+
+/** The enum a declared field type names, if it is one the graph knows. */
+function enumOf(graph: SymbolGraph, declared: string, dto: DtoLike) {
+  const bare = declared.trim().replace(/^\?/, '').split('|')[0]?.trim() ?? declared;
+  const language = languageOf(dto.file);
+  const type = resolveType(graph, bare, {
+    ...(language ? { language } : {}),
+    fromFile: dto.file,
+  });
+  return type?.kind === 'enum' && type.fields && type.fields.size > 0 ? type : null;
+}
+
+/** True when the declared type is a known enum, whatever its backing kind. */
+function isEnumTyped(graph: SymbolGraph, declared: string, dto: DtoLike): boolean {
+  return enumOf(graph, declared, dto) !== null;
+}
+
+/**
+ * A fixture value against a backed enum. A string is the right shape for one,
+ * so comparing kinds says nothing; what matters is whether the value is a case
+ * the enum still has.
+ */
+function enumValueCheck(
+  graph: SymbolGraph,
+  declared: string,
+  value: unknown,
+  dto: DtoLike,
+): { enumName: string; suggestion: string | null } | null {
+  if (typeof value !== 'string' && typeof value !== 'number') return null;
+  const type = enumOf(graph, declared, dto);
+  if (!type?.fields) return null;
+
+  const backing = [...type.fields.values()]
+    .map((f) => f.value)
+    .filter((v): v is string => v !== undefined);
+  // An enum with no backing values is a pure case list; the fixture cannot
+  // carry one as a scalar, so there is nothing to compare.
+  if (backing.length === 0) return null;
+  const written = String(value);
+  if (backing.includes(written)) return null;
+
+  let suggestion: string | null = null;
+  let best = Infinity;
+  for (const candidate of backing) {
+    const distance = similarity(written, candidate);
+    if (distance <= Math.max(2, Math.floor(written.length * 0.4)) && distance < best) {
+      best = distance;
+      suggestion = candidate;
+    }
+  }
+  return { enumName: type.name, suggestion };
 }
