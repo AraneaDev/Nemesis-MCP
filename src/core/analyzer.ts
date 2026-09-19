@@ -6,6 +6,7 @@
 import path from 'node:path';
 import type {
   AnalyzeOptions,
+  AnalyzeStats,
   Finding,
   MethodSymbol,
   SymbolGraph,
@@ -23,6 +24,84 @@ import {
 import { languageForFile } from './discovery.js';
 
 const SUPPRESSION = /nemesis-ignore/i;
+
+/**
+ * Targets that never had a contract to check. A double on `console.log` or
+ * `Date.now` is not a gap in this tool's reach, and counting it as one would
+ * make the roadmap look longer than it is.
+ */
+export const UNKNOWABLE_ROOTS: ReadonlySet<string> = new Set([
+  // JavaScript and the browser
+  'console',
+  'process',
+  'Date',
+  'Math',
+  'JSON',
+  'globalThis',
+  'window',
+  'document',
+  'navigator',
+  'localStorage',
+  'sessionStorage',
+  'Storage',
+  'fetch',
+  'crypto',
+  'performance',
+  'Intl',
+  'Reflect',
+  'Object',
+  'Array',
+  'Promise',
+  // Node
+  'fs',
+  'path',
+  'os',
+  'http',
+  'https',
+  'child_process',
+  'util',
+  'url',
+  'stream',
+  'zlib',
+  'buffer',
+  // Python
+  'sys',
+  'io',
+  'time',
+  'random',
+  'subprocess',
+  'shutil',
+  'logging',
+  'asyncio',
+  'datetime',
+  'socket',
+  'tempfile',
+  'builtins',
+  // PHP
+  'PDO',
+  'PDOStatement',
+  'DateTime',
+  'DateTimeImmutable',
+  'DateTimeZone',
+  'ArrayObject',
+  'SplObjectStorage',
+]);
+
+/**
+ * True when a target names something outside the scanned tree by construction:
+ * a built-in, a standard-library module, or a package specifier. A bare
+ * specifier is one that does not start with `.` and is not a dotted path
+ * rooted in the tree, which is exactly how a package is written.
+ */
+export function isUnknowableTarget(target: string): boolean {
+  const root = target.split(/[./\\]/)[0] ?? target;
+  if (UNKNOWABLE_ROOTS.has(root)) return true;
+  // `some-package`, `@scope/pkg`, `@scope/pkg/sub`: a specifier with no
+  // relative prefix names something this scan does not own.
+  return /^@?[a-z0-9][a-z0-9._-]*(\/[a-z0-9._-]+)*$/.test(target) && !target.startsWith('.')
+    ? /[-/]/.test(target)
+    : false;
+}
 
 function suppressed(lines: string[], line1: number): boolean {
   const idx = line1 - 1;
@@ -508,6 +587,27 @@ function classify(
   return findings;
 }
 
+/**
+ * Which bucket a double falls into. Kept separate from `classify` on purpose:
+ * `classify` decides what to report, and this decides what to admit to. The
+ * two ask the same resolution question, and a double that resolves but whose
+ * member is missing counts as checked, because the analyzer had something to
+ * say about it.
+ */
+function countDouble(d: TestDouble, graph: SymbolGraph, stats: AnalyzeStats): void {
+  if (!d.targetSymbol) {
+    stats.noTarget += 1;
+    return;
+  }
+  if (isUnknowableTarget(d.targetSymbol)) {
+    stats.unknowable += 1;
+    return;
+  }
+  const hint = { language: d.language, fromFile: d.file };
+  if (resolveType(graph, d.targetSymbol, hint)) stats.checked += 1;
+  else stats.unresolved += 1;
+}
+
 /** Lightweight literal type inference for return expressions. */
 export function inferType(expr: string, lang: string): string | null {
   const e = expr.trim();
@@ -773,6 +873,8 @@ export interface AnalyzeInput {
   /** Map of relative file → source lines (for suppression checks). */
   fileLines: Map<string, string[]>;
   options: AnalyzeOptions;
+  /** Filled in place when supplied. The analyzer's return value is unchanged. */
+  stats?: import('./types.js').AnalyzeStats;
 }
 
 export function analyzeDoubles(input: AnalyzeInput): Finding[] {
@@ -787,8 +889,10 @@ export function analyzeDoubles(input: AnalyzeInput): Finding[] {
     }
   }
   findings.push(...manualMockFindings(input.graph));
+  const stats = input.stats;
   for (const d of input.doubles) {
     const lines = input.fileLines.get(d.file) ?? [];
+    if (stats) countDouble(d, input.graph, stats);
     findings.push(...classify(d, input.graph, lines, reportedFinalTargets, symbolsByFile));
   }
   const seen = new Set<string>();
