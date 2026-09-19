@@ -29,7 +29,8 @@ export default {
   vitest: { configFile: 'vitest.mutation.config.ts', related: false },
   coverageAnalysis: 'perTest',
   mutate: [],
-  reporters: ['clear-text', 'progress'],
+  reporters: ['clear-text', 'progress', 'json'],
+  jsonReporter: { fileName: 'reports/mutation/mutation.json' },
   tempDirName: '.stryker-tmp',
   concurrency: 2,
 };

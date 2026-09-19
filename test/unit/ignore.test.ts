@@ -92,3 +92,85 @@ describe('gitignore-lite matching', () => {
     expect(isExcluded('src/app.ts', [], p, false)).toBe(false);
   });
 });
+
+describe('glob translation, branch by branch', () => {
+  const m = (pattern: string, p: string, isDir = false) =>
+    matchesIgnorePatterns(p, isDir, compile(pattern));
+
+  it('a single star stays inside one path segment', () => {
+    expect(m('a*c', 'abc')).toBe(true);
+    expect(m('a*c', 'ac')).toBe(true);
+    // `*` must not cross a separator, which is what separates it from `**`.
+    expect(m('a*c', 'a/c')).toBe(false);
+    expect(m('a*c', 'ab/bc')).toBe(false);
+  });
+
+  it('a bare double star crosses separators', () => {
+    expect(m('a**c', 'a/b/c')).toBe(true);
+    expect(m('a**c', 'ac')).toBe(true);
+  });
+
+  it('double star followed by a slash matches zero or more directories', () => {
+    expect(m('src/**/gen', 'src/gen', true)).toBe(true);
+    expect(m('src/**/gen', 'src/a/gen', true)).toBe(true);
+    expect(m('src/**/gen', 'src/a/b/gen', true)).toBe(true);
+    expect(m('src/**/gen', 'other/gen', true)).toBe(false);
+  });
+
+  it('a question mark matches exactly one character, never a separator', () => {
+    expect(m('a?c', 'abc')).toBe(true);
+    expect(m('a?c', 'ac')).toBe(false);
+    expect(m('a?c', 'abbc')).toBe(false);
+    expect(m('a?c', 'a/c')).toBe(false);
+  });
+
+  it('honours a character class', () => {
+    expect(m('a[bc]d', 'abd')).toBe(true);
+    expect(m('a[bc]d', 'acd')).toBe(true);
+    expect(m('a[bc]d', 'aed')).toBe(false);
+  });
+
+  it('treats an unclosed bracket as a literal', () => {
+    expect(m('a[bc', 'a[bc')).toBe(true);
+    expect(m('a[bc', 'ab')).toBe(false);
+  });
+
+  it('escapes regex metacharacters outside a class', () => {
+    expect(m('a.c', 'a.c')).toBe(true);
+    expect(m('a.c', 'abc')).toBe(false);
+    expect(m('a+c', 'a+c')).toBe(true);
+    expect(m('a+c', 'aac')).toBe(false);
+    expect(m('a(b)c', 'a(b)c')).toBe(true);
+    expect(m('a|b', 'a|b')).toBe(true);
+    expect(m('a$b', 'a$b')).toBe(true);
+  });
+});
+
+describe('pattern compilation edge cases', () => {
+  it('strips repeated trailing slashes and still marks the rule directory-only', () => {
+    const p = compile('build//');
+    expect(matchesIgnorePatterns('build', true, p)).toBe(true);
+    expect(matchesIgnorePatterns('build', false, p)).toBe(false);
+  });
+
+  it('yields no rule when nothing survives the prefixes', () => {
+    expect(compileIgnoreLine('/')).toBeNull();
+    expect(compileIgnoreLine('!')).toBeNull();
+    expect(compileIgnoreLine('!/')).toBeNull();
+    expect(compileIgnoreLine('///')).toBeNull();
+  });
+
+  it('anchors on a leading slash but not on a trailing one', () => {
+    expect(matchesIgnorePatterns('a/build', true, compile('/build'))).toBe(false);
+    expect(matchesIgnorePatterns('a/build', true, compile('build/'))).toBe(true);
+  });
+
+  it('keeps a negation that is also directory-only', () => {
+    const p = compile('build/', '!build/keep/');
+    expect(matchesIgnorePatterns('build', true, p)).toBe(true);
+    expect(matchesIgnorePatterns('build/keep', true, p)).toBe(false);
+    // The negation is directory-only, so a file of that name stays unmatched
+    // by both rules rather than being re-included by the wrong one.
+    expect(matchesIgnorePatterns('build/keep', false, p)).toBe(false);
+  });
+});
