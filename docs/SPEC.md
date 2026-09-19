@@ -51,7 +51,22 @@ the analysis is purely syntactic and semantic-lite.
 Fixture checking (tool 3) inspects JSON and YAML fixtures against production
 DTO/class/record shapes. Field extraction covers TypeScript interfaces,
 type aliases/classes, PHP properties, Python class attributes, and Rust struct
-fields; unsupported or ambiguous matches are reported diagnostically.
+fields.
+
+A file is a candidate fixture only when it carries a JSON/YAML extension, sits
+under a fixture or test directory, is not a known configuration file
+(`package.json`, `tsconfig*.json`, lockfiles, compose files, OpenAPI documents)
+and is not inside a tooling directory (`.github/`, `.vscode/`, `.cursor/`, …).
+The walk shares the audit's exclusions and `.gitignore` handling, and enforces
+the same per-file byte and duration budgets.
+
+Binding a fixture to a DTO requires a name match or a shape match. A shape
+match needs at least three shared fields covering ≥60% of the fixture's keys
+and ≥50% of the DTO's fields. Name signals come from the file name and from
+top-level keys whose value actually holds records.
+
+An unmatched fixture is counted in `unmatched_fixtures`, and an unparsable one
+is listed in `unparsable_fixtures`. Neither makes the scan partial.
 
 ## 4. Architecture
 
@@ -205,6 +220,15 @@ case-sensitively, so `patch('pkg.transport.urlopen')` cannot resolve the module
   the same object as `nemesis_audit`.
 - Exit codes: `0` = complete clean scan, `1` = violations found,
   `2` = operational error or partial scan (diagnostics are present).
+  `verify-symbol` exits 1 when any double no longer matches its target, so it
+  can gate a merge on its own.
+- A fatal diagnostic (a path that cannot be read, a grammar that fails to load)
+  is always exit 2. A non-fatal one (a file skipped by a budget) is exit 2 by
+  default and falls back to the finding-based code under `--allow-partial`.
+- Every diagnostic is summarised on stderr, grouped by reason, so an exit 2 is
+  never silent.
+- Unknown commands, unknown options, invalid strictness values and unknown
+  languages are rejected with exit 2 rather than ignored.
 - The MCP server never exits non-zero for findings; it returns structured
   results for the agent to interpret.
 

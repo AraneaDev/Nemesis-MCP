@@ -85,3 +85,38 @@ describe('report rendering', () => {
     expect(parsed).toEqual(broken);
   });
 });
+
+describe('partial scans versus operational failures', () => {
+  function withDiagnostics(fatal: boolean) {
+    return {
+      summary: {
+        scanned_test_files: 1,
+        doubles_inspected: 0,
+        violations_count: 0,
+        diagnostics: [
+          {
+            file: 'big.php',
+            language: 'php' as const,
+            stage: 'budget' as const,
+            message: 'File exceeds 2000000 byte limit',
+            fatal,
+          },
+        ],
+        partial: true,
+      },
+      violations: [],
+    };
+  }
+
+  it('fails a partial scan by default', () => {
+    expect(exitCodeFor(withDiagnostics(false), 'all')).toBe(2);
+  });
+
+  it('lets --allow-partial fall back to the finding-based code', () => {
+    expect(exitCodeFor(withDiagnostics(false), 'all', { allowPartial: true })).toBe(0);
+  });
+
+  it('never downgrades a fatal diagnostic', () => {
+    expect(exitCodeFor(withDiagnostics(true), 'all', { allowPartial: true })).toBe(2);
+  });
+});

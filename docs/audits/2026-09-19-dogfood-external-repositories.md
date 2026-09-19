@@ -163,6 +163,30 @@ Nemesis has the same problem with its own `fixtures/` tree and the same
 workaround. Any repository whose purpose is to detect broken code will keep
 broken code on purpose; a tool of this kind should expect that of its peers.
 
+## 7. What the second cycle added
+
+The first cycle only exercised `nemesis audit`. Running `nemesis fixtures`
+across the same 54 checkouts turned up nothing wrong with those repositories
+and a great deal wrong with the command, which is recorded in the commit
+rather than here. Two observations about the repositories are worth keeping.
+
+**Deliberately broken data is everywhere, and that is correct.** Fixture
+directories legitimately contain files that will never parse: nekyia keeps a
+truncated `meta.json` to exercise its recovery path, mcpobservatory keeps a
+`.cursor/mcp.json` carrying a Unicode right-to-left override as a security
+corpus case, oogactx keeps a `playwright-console.json` that is actually
+Markdown, and several repositories keep a `tsconfig.json` with comments, which
+is valid JSONC and invalid JSON. Any tool that treats an unparsable file under
+`tests/` as its own failure will fail in most of these repositories. It is data
+the tests own, not input the tool is entitled to.
+
+**Test corpora look like projects.** mcpobservatory's
+`tests/analysis/corpus/cases/` holds dozens of miniature packages, each with
+its own `package.json`. Counting those as project metadata, or as fixtures,
+both give the wrong answer. A corpus of fake projects is one of the harder
+shapes for any repository-walking tool to classify, and it is worth knowing it
+is there before pointing a new linter at that repository.
+
 ## Method
 
 Each repository was audited from its root with `nemesis audit --json` at default
@@ -180,3 +204,18 @@ All 32 remaining findings are the deliberate fixtures in Nemesis (20) and
 Momus-MCP (12). The drop from 139 is false positives removed, not detection
 lost: a control run that renamed a production method and changed a declared
 return type in an otherwise clean repository still reported both.
+
+A second cycle repeated the sweep for `nemesis fixtures`:
+
+| | Before | After |
+| --- | --- | --- |
+| Files treated as fixtures | 19,431 | 205 |
+| Violations reported | 17,728 | 2 |
+| Repositories exiting 0 | 0 | 52 |
+| Repositories exiting 2 | 52 | 1 |
+| Timeouts and crashes | 2 | 0 |
+| Total wall time | 371.2 s | 33.5 s |
+
+The two surviving findings are the intentionally stale fixture in this
+repository. The single exit 2 is workflow-dockerized, for the reason in
+section 1.

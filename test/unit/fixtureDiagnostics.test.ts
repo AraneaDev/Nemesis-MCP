@@ -1,18 +1,64 @@
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { checkFixtures } from '../../src/fixtures/staleFixtures.js';
 
 const root = path.resolve(import.meta.dirname, '..', '..');
 
 describe('fixture diagnostics', () => {
-  it('reports malformed fixture input instead of clean success', async () => {
+  it('names malformed fixture input instead of claiming a clean success', async () => {
     const rel = 'test/fixtures-invalid/invalid.json';
     const result = await checkFixtures(root, [rel]);
     expect(result.scanned).toBe(0);
-    expect(result.diagnostics.some((diagnostic) => diagnostic.stage === 'parse')).toBe(true);
+    expect(result.unparsable).toContain(rel);
+  }, 120_000);
+
+  it('does not turn unparsable input into a partial scan', async () => {
+    // Test corpora are full of deliberately broken JSON, truncated files and
+    // JSONC configs. Counting each as a diagnostic made `nemesis fixtures`
+    // exit 2 in 52 of 54 repositories.
+    const result = await checkFixtures(root, ['test/fixtures-invalid/invalid.json']);
+    expect(result.diagnostics.some((d) => d.stage === 'parse')).toBe(false);
+    expect(result.diagnostics.filter((d) => d.fatal)).toEqual([]);
   }, 120_000);
 
   it('fails for missing explicit fixture paths', async () => {
-    await expect(checkFixtures(root, ['fixtures/fixtures-data/missing.json'])).rejects.toThrow(/does not exist/);
+    await expect(checkFixtures(root, ['fixtures/fixtures-data/missing.json'])).rejects.toThrow(
+      /does not exist/,
+    );
   });
+});
+
+describe('fixture to DTO matching', () => {
+  it('matches a wrapper key that holds records', async () => {
+    const result = await checkFixtures(root, ['fixtures/fixtures-data']);
+    expect(result.scanned).toBe(1);
+    const messages = result.violations.map((v) => v.message);
+    expect(messages.some((m) => m.includes("missing required field 'name'"))).toBe(true);
+  }, 120_000);
+
+  it('ignores a scalar key that merely shares a name with a class', async () => {
+    // `{ "edition": "2026-q1", ... }` is a report blob, not an `Edition`
+    // record. Using every top-level key as a name signal bound the two
+    // together and reported four fields as missing.
+    const dir = path.join(root, 'test', 'fixtures-scalarkey');
+    await mkdir(path.join(dir, 'src'), { recursive: true });
+    await mkdir(path.join(dir, 'tests', 'fixtures'), { recursive: true });
+    await writeFile(
+      path.join(dir, 'src', 'edition.ts'),
+      'export interface Edition {\n  slug: string;\n  data: string;\n  findings: string;\n}\n',
+    );
+    await writeFile(
+      path.join(dir, 'tests', 'fixtures', 'report.json'),
+      JSON.stringify({ schema: 1, edition: '2026-q1', asOf: 'now' }),
+    );
+    try {
+      const result = await checkFixtures(dir);
+      expect(result.scanned).toBe(1);
+      expect(result.violations).toEqual([]);
+      expect(result.unmatched).toBe(1);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 120_000);
 });

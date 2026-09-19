@@ -54,17 +54,43 @@ node dist/cli/main.js audit   # or link the package to use `nemesis`
 ### CLI
 
 ```bash
-nemesis audit [paths...] [--json] [--strictness=<mode>] [--lang=<l1,l2>] [--exclude=<dir>]
-nemesis verify-symbol <SymbolName> [--json]
-nemesis fixtures [paths...] [--json]
+nemesis audit [paths...] [options]
+nemesis verify-symbol <SymbolName> [options]
+nemesis fixtures [paths...] [options]
 ```
 
-- `--strictness=all | untyped_only | breaking_only` (default `breaking_only`)
-- Exit codes: `0` clean, `1` violations found, `2` operational error or partial scan.
-- Audits enforce default limits of 10,000 discovered files, 2 MB per file,
-  200 MB total input, and 120 seconds per audit. Diagnostics are returned in
-  the summary when files are skipped or fail to parse; partial scans exit 2
-  rather than reporting clean.
+| Option | Meaning |
+| --- | --- |
+| `--json` | Machine-readable output instead of text. |
+| `--strictness=<mode>` | `all`, `untyped_only` or `breaking_only` (default). |
+| `--lang=<l1,l2>` | Restrict to some of `typescript, javascript, php, python, rust`. |
+| `--include=<path>` | Extra path to scan; repeatable. |
+| `--exclude=<dir>` | Directory name to skip; repeatable. |
+| `--allow-partial` | Do not fail merely because files were skipped. |
+| `-h, --help` / `-V, --version` | Help, version. |
+
+An unknown command, an unknown option, an invalid strictness and an unknown
+language are all errors. None of them is silently ignored, because a dropped
+`--strictness` typo is a scan that passes for the wrong reason.
+
+### Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Clean scan, nothing to report. |
+| `1` | Violations found. `verify-symbol` uses this when any double no longer matches. |
+| `2` | Operational error, or a partial scan. |
+
+Audits enforce default limits of 10,000 discovered files, 2 MB per file,
+200 MB total input, and 120 seconds per audit. Files that are skipped or fail
+to parse appear as diagnostics in the summary and are always explained on
+stderr, so an exit 2 never arrives without a reason.
+
+A partial scan exits 2 rather than reporting clean, because a file the symbol
+graph never saw could be hiding a ghost method. When the gap is known and
+acceptable, for instance a repository that commits multi-megabyte generated
+seeders, `--allow-partial` falls back to the finding-based code. A file the
+walk could not read at all stays an exit 2 either way.
 
 ### MCP Server
 
@@ -75,15 +101,43 @@ nemesis-mcp --serve    # stdio MCP server
 Three tools:
 
 1. **`nemesis_audit`** — scan the repo (or `paths`) for drift.
-   Params: `paths?`, `strictness?`, `lang?`.
+   Params: `paths?`, `strictness?`, `lang?`, `exclude?`.
    Returns `{ summary: { scanned_test_files, doubles_inspected, violations_count }, violations: [...] }`.
 2. **`nemesis_verify_symbol`** — list every double pointing at a symbol and
    whether each remains valid after your latest edit.
-   Params: `symbol` (e.g. `App\Services\InvoiceService` or `UserService`).
+   Params: `symbol` (e.g. `App\Services\InvoiceService` or `UserService`),
+   `strictness?`, `exclude?`. Returns the report plus
+   `summary: { doubles, invalid }` so an agent can branch without counting.
 3. **`nemesis_stale_fixtures`** — check JSON/YAML fixtures against current
    DTO shapes (missing/renamed/removed fields). Strictness filtering is shared
    with the CLI and supports `all`, `untyped_only`, and `breaking_only`.
-   Params: `paths?`, `strictness?`.
+   Params: `paths?`, `strictness?`. Returns `unmatched_fixtures` alongside
+   `scanned_fixtures`, plus `unparsable_fixtures` when any fixture-shaped file
+   is not valid JSON or YAML.
+
+A failing scan comes back as a tool error with `isError`, rather than a
+transport-level rejection the agent cannot read.
+
+## What counts as a fixture
+
+`nemesis fixtures` only inspects JSON and YAML that lives where fixtures live:
+under `fixtures/`, `__fixtures__/`, `testdata/`, `__snapshots__/`,
+`cassettes/`, `stubs/`, `mocks/`, `factories/`, `seeds/`, `samples/`, or inside
+a test root. Configuration keeps its own identity wherever it sits, so
+`package.json`, `tsconfig*.json`, lockfiles, `docker-compose*.yml`, OpenAPI
+documents and anything under `.github/`, `.vscode/` or `.cursor/` are never
+treated as fixtures, even inside a test corpus.
+
+A fixture is bound to a DTO by name or by shape. A shape match needs at least
+three shared fields covering most of both the fixture and the DTO, because two
+shared keys is coincidence. A top-level key counts as a name only when it
+actually holds records: `{"users": [{...}]}` names `UserRecord`, while
+`{"edition": "2026-q1"}` is a string that happens to share a word with a class.
+
+A fixture that matches no DTO is counted, not reported: most fixtures describe
+no DTO at all. A fixture that will not parse is named in the summary and does
+not make the scan partial, because test corpora deliberately contain truncated
+and malformed files.
 
 Example `nemesis_audit` response:
 

@@ -37,8 +37,17 @@ export function renderJson(result: AuditResult): string {
 }
 
 /** CLI exit code per spec §8. */
-export function exitCodeFor(result: AuditResult, _strictness: string): number {
-  if (result.summary.diagnostics?.some((diagnostic) => diagnostic.fatal)) return 2;
-  if (result.summary.diagnostics?.length) return 2;
+export function exitCodeFor(
+  result: AuditResult,
+  _strictness: string,
+  opts: { allowPartial?: boolean } = {},
+): number {
+  const diagnostics = result.summary.diagnostics ?? [];
+  // A file the walk could not read at all is an operational failure and is
+  // never downgraded. Files skipped by a budget leave a gap in the symbol
+  // graph, so the scan still cannot be called clean, but the caller may
+  // knowingly accept that gap.
+  if (diagnostics.some((diagnostic) => diagnostic.fatal)) return 2;
+  if (diagnostics.length > 0 && !opts.allowPartial) return 2;
   return result.violations.length > 0 ? 1 : 0;
 }
