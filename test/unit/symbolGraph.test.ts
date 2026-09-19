@@ -395,3 +395,122 @@ describe('ancestry that runs outside the scanned tree', () => {
     expect(hasUnresolvedAncestor(g, a!)).toBe(false);
   });
 });
+
+describe('paths no test reached before', () => {
+  function cls(name: string, file: string, methods: string[] = [], ext: string[] = []): TypeSymbol {
+    return {
+      name,
+      file,
+      kind: 'class',
+      methods: new Map(
+        methods.map((m) => [
+          m,
+          { name: m, returnType: null, params: [], visibility: 'public', line: 1 },
+        ]),
+      ),
+      unknownMembers: new Set(),
+      extends: ext,
+      implements: [],
+      uses: [],
+      line: 1,
+    };
+  }
+
+  it('does not record the same declaration twice', () => {
+    // Re-scanning a file must not grow the variant list, or a type would
+    // start looking ambiguous against itself.
+    const g = emptyGraph();
+    addType(g, cls('Svc', 'src/svc.ts', ['a']));
+    addType(g, cls('Svc', 'src/svc.ts', ['a']));
+    expect(g.typeVariants.get('svc')).toHaveLength(1);
+  });
+
+  it('records a genuinely different declaration of the same name', () => {
+    const g = emptyGraph();
+    addType(g, cls('Svc', 'a/svc.ts'));
+    addType(g, cls('Svc', 'b/svc.ts'));
+    expect(g.typeVariants.get('svc')).toHaveLength(2);
+  });
+
+  it('resolves a bare target name with no method', () => {
+    const g = emptyGraph();
+    addType(g, cls('Svc', 'src/svc.ts', ['a']));
+    const r = resolveTarget(g, 'Svc');
+    expect(r?.type.name).toBe('Svc');
+    expect(r?.method).toBeNull();
+    expect(r?.member).toBeNull();
+  });
+
+  it('returns null for a bare target that does not exist', () => {
+    expect(resolveTarget(emptyGraph(), 'Nope')).toBeNull();
+  });
+
+  describe('did-you-mean suggestions', () => {
+    const type = cls('Svc', 'src/svc.ts', ['findBySku', 'removeBySku']);
+
+    it('offers the closest candidate', () => {
+      expect(suggestMember(type, 'findBySKU')).toBe('findBySku');
+    });
+
+    it('offers nothing when no candidate is close enough', () => {
+      expect(suggestMember(type, 'completelyUnrelated')).toBeNull();
+    });
+
+    it('offers nothing when the type has no members', () => {
+      expect(suggestMember(cls('Empty', 'src/e.ts'), 'anything')).toBeNull();
+    });
+
+    it('prefers a later candidate that is closer', () => {
+      // Both are within the threshold, so the comparison between them is what
+      // decides; without it the first one scanned would always win.
+      const t = cls('S', 's.ts', ['loginxy', 'logins']);
+      expect(suggestMember(t, 'login')).toBe('logins');
+    });
+
+    it('keeps the earlier candidate when a later one is no closer', () => {
+      const t = cls('S', 's.ts', ['logins', 'loginxy']);
+      expect(suggestMember(t, 'login')).toBe('logins');
+    });
+
+    it('allows at least two edits even for a short name', () => {
+      // The threshold floor is what makes a short name suggestible at all.
+      expect(suggestMember(cls('S', 's.ts', ['run']), 'rn')).toBe('run');
+    });
+  });
+
+  describe('unresolved ancestry', () => {
+    it('follows the chain transitively', () => {
+      // A knows B, B extends something the graph has never seen.
+      const g = emptyGraph();
+      addType(g, cls('A', 'src/a.ts', ['a'], ['B']));
+      addType(g, cls('B', 'src/b.ts', ['b'], ['Vendor\\Base']));
+      const a = resolveType(g, 'A');
+      expect(hasUnresolvedAncestor(g, a!)).toBe(true);
+    });
+
+    it('treats a chain deeper than the hop limit as unknowable', () => {
+      const g = emptyGraph();
+      const depth = 20;
+      for (let i = 0; i < depth; i++) {
+        addType(g, cls(`T${i}`, `src/t${i}.ts`, ['m'], [`T${i + 1}`]));
+      }
+      addType(g, cls(`T${depth}`, `src/t${depth}.ts`, ['m']));
+      const root = resolveType(g, 'T0');
+      expect(hasUnresolvedAncestor(g, root!)).toBe(true);
+    });
+
+    it('accepts a chain within the hop limit', () => {
+      const g = emptyGraph();
+      addType(g, cls('A', 'src/a.ts', ['a'], ['B']));
+      addType(g, cls('B', 'src/b.ts', ['b'], ['C']));
+      addType(g, cls('C', 'src/c.ts', ['c']));
+      expect(hasUnresolvedAncestor(g, resolveType(g, 'A')!)).toBe(false);
+    });
+
+    it('does not loop on a type that names itself', () => {
+      const g = emptyGraph();
+      addType(g, cls('Self', 'src/self.ts', ['m'], ['Self']));
+      expect(hasUnresolvedAncestor(g, resolveType(g, 'Self')!)).toBe(false);
+    });
+  });
+});
