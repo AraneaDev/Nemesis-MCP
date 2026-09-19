@@ -641,7 +641,14 @@ export function inferType(expr: string, lang: string): string | null {
   if (/^(true|false|True|False)$/.test(e)) return 'bool';
   if (/^-?\d+(\.\d+)?$/.test(e)) return lang === 'php' ? 'int' : 'number';
   // string literals, including template literals and Python f/r/b prefixes
-  if (/^[a-z]{0,2}(['"`])[\s\S]*\1$/i.test(e)) return 'string';
+  if (/^[a-z]{0,2}(['"`])[\s\S]*\1$/i.test(e)) {
+    // A `b`, `rb`, `br` (any case) prefix is a Python bytes literal, not a
+    // string: `b"zipdata"` returned from a stub matching `-> bytes` is
+    // correct code, not drift.
+    const prefix = /^([a-z]{0,2})['"`]/i.exec(e)?.[1] ?? '';
+    if (/b/i.test(prefix)) return 'bytes';
+    return 'string';
+  }
   if (/^\[[\s\S]*]$/.test(e) || /^(array|list|tuple|set|vec!)\s*[([]/.test(e)) {
     return lang === 'php' ? 'array' : 'list';
   }
@@ -672,6 +679,7 @@ type Kind =
   | 'int'
   | 'float'
   | 'string'
+  | 'bytes'
   | 'list'
   | 'dict'
   | 'callable'
@@ -765,6 +773,10 @@ function alternatives(raw: string, depth = 0): string[] {
 
 const WILD = /^(mixed|any|unknown|self|static|this|json|jsonvalue|serializable)$/;
 const STRING = /^(string|str|&str|String|text|char)$/;
+// `byte` (singular) is the Java/C# integer type and stays in INT below;
+// `bytes`/`bytearray`/`memoryview` are Python's binary-data types and must
+// not satisfy `str`.
+const BYTES = /^(bytes|bytearray|memoryview)$/;
 const BOOL = /^(bool|boolean)$/;
 const INT = /^(int|integer|long|short|byte|bigint|usize|isize|[iu](8|16|32|64|128))$/;
 const FLOAT = /^(float|double|number|real|decimal|f32|f64)$/;
@@ -803,6 +815,7 @@ function canon(raw: string): Canon {
 
   if (WILD.test(lower)) return { kind: 'wild' };
   if (STRING.test(lower) || STRING.test(short)) return { kind: 'string' };
+  if (BYTES.test(lower)) return { kind: 'bytes' };
   if (BOOL.test(lower)) return { kind: 'bool' };
   if (INT.test(lower)) return { kind: 'int' };
   if (FLOAT.test(lower)) return { kind: 'float' };
@@ -839,6 +852,8 @@ function kindSatisfies(s: Canon, d: Canon, lang: string): boolean {
       return d.kind === 'int' || d.kind === 'float';
     case 'string':
       return d.kind === 'string';
+    case 'bytes':
+      return d.kind === 'bytes';
     case 'list':
       // A PHP `array` literal is both a list and a hash.
       return d.kind === 'list' || (lang === 'php' && d.kind === 'dict');

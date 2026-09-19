@@ -116,6 +116,46 @@ describe('inferType', () => {
   it('infers new expressions', () => {
     expect(inferType('new App\\User()', 'php')).toBe('App\\User');
   });
+
+  it('infers a Python bytes literal as bytes, not string', () => {
+    expect(inferType('b"zipdata"', 'python')).toBe('bytes');
+    expect(inferType("b'zipdata'", 'python')).toBe('bytes');
+    expect(inferType('rb"zipdata"', 'python')).toBe('bytes');
+    expect(inferType('br"zipdata"', 'python')).toBe('bytes');
+    expect(inferType('Rb"zipdata"', 'python')).toBe('bytes');
+    expect(inferType('bR"zipdata"', 'python')).toBe('bytes');
+  });
+
+  it('still infers f/r prefixed strings as string', () => {
+    expect(inferType('f"hi {name}"', 'python')).toBe('string');
+    expect(inferType('r"raw\\path"', 'python')).toBe('string');
+  });
+});
+
+describe('bytes vs string in the type lattice', () => {
+  it('a bytes stub satisfies a bytes-declared return', () => {
+    expect(typesCompatible('b"zipdata"', 'bytes', 'python')).toBe(true);
+  });
+
+  it('a bytes stub does not satisfy str', () => {
+    expect(typesCompatible('b"zipdata"', 'str', 'python')).toBe(false);
+  });
+
+  it('a plain string stub does not satisfy bytes', () => {
+    expect(typesCompatible("'zipdata'", 'bytes', 'python')).toBe(false);
+  });
+
+  it('bytearray and memoryview agree with bytes', () => {
+    expect(typesCompatible('bytes', 'bytearray', 'python')).toBe(true);
+    expect(typesCompatible('bytes', 'memoryview', 'python')).toBe(true);
+    expect(typesCompatible('bytearray', 'str', 'python')).toBe(false);
+  });
+
+  it('a Java/C# byte (singular) still behaves as int, not bytes', () => {
+    expect(typesCompatible('byte', 'int', 'java')).toBe(true);
+    expect(typesCompatible('42', 'byte', 'java')).toBe(true);
+    expect(typesCompatible('byte', 'bytes', 'java')).toBe(false);
+  });
 });
 
 describe('unresolvable named types', () => {
