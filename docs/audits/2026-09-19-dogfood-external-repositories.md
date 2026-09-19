@@ -33,6 +33,7 @@ so the rest of this file is about what the sweep revealed.
 | Test corpus of miniature projects | mcpobservatory |
 | Rust present, mockall used only in Momus-MCP's fixtures | Knossos-MCP, Chaos-MCP, expensis, glyphfall, 3d-wasm, talos, proxypilot, Momus-MCP, ratio, Sneaky-MCP, termaxa |
 | Repository root reachable through its own symlink | oogactx |
+| Mocks a framework base class whose members live in `vendor/` | thin-ratio, e-commerce-api |
 
 ## 1. Oversized generated files in the working tree
 
@@ -239,6 +240,34 @@ they exercise, rather than in Cargo's `tests/`. Classifying by directory alone
 gets both wrong: the tests are missed, or the neighbouring trait source is
 mistaken for a test and never indexed.
 
+## 9. What the fourth cycle added
+
+The fourth cycle worked through every double pattern the README and the spec
+advertise, one probe per pattern, instead of testing what the code already
+did. That is a cheap and repeatable exercise and it found six defects in
+Nemesis, recorded in the commit. One observation about this corpus is worth
+keeping.
+
+**Mocking a framework base class is normal, and it defeats static member
+checking.** thin-ratio's `api/tests/Feature/Health/HealthChecksTest.php` builds
+a partial mock of a Laravel model and stubs `getAttribute`:
+
+```php
+$cred = Mockery::mock(ProviderCredential::class)->makePartial();
+$cred->shouldReceive('getAttribute')->with('credentials')->andReturn($config);
+```
+
+`ProviderCredential` declares none of that; `getAttribute` comes from
+`Illuminate\Database\Eloquent\Model`, which lives in `vendor/` and is never
+walked. Nemesis reported it as a definite ghost method until the ancestry check
+landed, and it is now a warning.
+
+The same shape appears wherever a framework supplies behaviour through
+inheritance: Eloquent models, Symfony controllers, Django models, React
+components. Any tool reasoning about members from source alone will either
+report these as missing or has already decided not to look. It is worth
+knowing which, before trusting a clean result on a framework-heavy repository.
+
 ## Method
 
 Each repository was audited from its root with `nemesis audit --json` at default
@@ -295,3 +324,10 @@ none of them contains a test double, so none of them changed a count.
 `audit` and `verify-symbol` were also compared directly over every flagged
 symbol in this repository and in Momus-MCP: the two produce identical finding
 sets, 22 and 12 respectively.
+
+A fourth cycle probed every documented double pattern and fixed six defects in
+Nemesis. Nothing moved across the corpus: audit 51 clean and 35 violations,
+fixtures 52 clean and 2, one partial scan in each. The only repository whose
+result changed during the cycle was thin-ratio, which briefly gained a finding
+from the Laravel model in section 9 before the ancestry check reclassified it
+as a warning.
