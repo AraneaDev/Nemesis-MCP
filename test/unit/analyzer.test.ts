@@ -736,7 +736,7 @@ describe('accessors and members a framework cannot route through', () => {
   it('reports spying on a getter without an access type', async () => {
     const found = await tsRun(ACCESSORS, 'label');
     expect(found.map((f) => f.message)).toContain(
-      "'label' is a getter on 'Svc', so spying on it needs an access type such as 'get'.",
+      "'label' is a getter on 'Svc', so doubling it needs an access type such as 'get'.",
     );
   });
 
@@ -793,5 +793,79 @@ describe('accessors and members a framework cannot route through', () => {
     expect(found.map((f) => f.message)).toContain(
       "'__construct' cannot be stubbed on a double of 'App\\Gateway'; the framework never routes through it.",
     );
+  });
+});
+
+describe('enum backing values in a stub', () => {
+  async function run(method: string, extra: Record<string, unknown>) {
+    const { analyzeDoubles } = await import('../../src/core/analyzer.js');
+    const { indexPhpFile } = await import('../../src/extractors/php/index.js');
+    const graph = emptyGraph();
+    await indexPhpFile(
+      'src/O.php',
+      `<?php namespace App;
+       enum Status: string { case Open = 'open'; case Shut = 'shut'; }
+       enum Plain { case One; case Two; }
+       class Order {
+         public function status(): Status { }
+         public function plain(): Plain { }
+         public function move(Status $to): bool { }
+       }`,
+      graph,
+    );
+    return analyzeDoubles({
+      doubles: [
+        {
+          framework: 'PHPUnit_MockObject',
+          language: 'php',
+          file: 'tests/OTest.php',
+          line: 3,
+          targetSymbol: 'App\\Order',
+          method,
+          methods: [{ name: method, line: 3 }],
+          withArity: null,
+          assertedArity: null,
+          returnTypeHint: null,
+          returnExpr: null,
+          confidence: 'definite',
+          ...extra,
+        } as never,
+      ],
+      graph,
+      fileLines: new Map([['tests/OTest.php', ['', '', '', '']]]),
+      options: { strictness: 'all' },
+    });
+  }
+
+  it('accepts a string that is one of the backing values', async () => {
+    // A string is the right shape for a backed enum, so comparing kinds would
+    // report every correct value as drift.
+    expect(await run('status', { returnExpr: "'open'" })).toEqual([]);
+    expect(await run('status', { returnExpr: "'shut'" })).toEqual([]);
+  });
+
+  it('reports a string that is not a case, with a suggestion', async () => {
+    const found = await run('status', { returnExpr: "'opn'" });
+    expect(found[0]?.message).toContain('is not a case of App\\Status');
+    expect(found[0]?.suggestion).toBe('open');
+  });
+
+  it('checks an argument the same way', async () => {
+    expect(await run('move', { withArity: 1, withArgs: ["'open'"] })).toEqual([]);
+    const found = await run('move', { withArity: 1, withArgs: ["'archived'"] });
+    expect(found[0]?.message).toContain('is not a case of App\\Status');
+  });
+
+  it('falls back to the type check for an enum with no backing values', async () => {
+    // A pure case list has no scalar form, so a string is not a near miss on
+    // a backing value; it is the wrong type outright.
+    const found = await run('plain', { returnExpr: "'One'" });
+    expect(found[0]?.message).toBe("Stub returns 'string' but App\\Order::plain returns 'Plain'.");
+  });
+
+  it('leaves a member reference to the other check', async () => {
+    // `Status::Shut` is a member reference, not a backing value; treating it
+    // as one reported every correct reference as missing.
+    expect(await run('status', { returnExpr: 'Status::Shut' })).toEqual([]);
   });
 });

@@ -141,9 +141,26 @@ export async function indexPythonFile(
               n.namedChildren.some(
                 (c) => c.type === 'decorator' && /\bstaticmethod\b/.test(c.text),
               );
+            // `@property` makes the member an attribute, not a callable, so
+            // patching it the ordinary way replaces the descriptor with a Mock
+            // and the property stops behaving like one.
+            const decorators =
+              n.type === 'decorated_definition'
+                ? n.namedChildren.filter((c) => c.type === 'decorator').map((c) => c.text)
+                : [];
+            const accessor = decorators.some((t) => /^@\s*property\b/.test(t.trim()))
+              ? 'get'
+              : decorators.some((t) => /\.setter\b/.test(t))
+                ? 'set'
+                : null;
             const m = fnNode ? fnFromNode(fnNode, !isStatic) : null;
             if (m) {
               m.visibility = pyVisibility(m.name);
+              if (accessor) m.modifiers = [...(m.modifiers ?? []), accessor];
+              const existing = sym.methods.get(m.name);
+              // A getter describes what reading the member yields, which is
+              // what a patch replaces, so it wins over its setter.
+              if (existing?.modifiers?.includes('get') && accessor === 'set') continue;
               sym.methods.set(m.name, m);
             }
           }

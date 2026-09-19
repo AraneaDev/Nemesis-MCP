@@ -152,6 +152,11 @@ is listed in `unparsable_fixtures`. Neither makes the scan partial.
      longer has. A renamed case still parses and still type-checks against the
      enum, so nothing else here would notice. Enum members are indexed for
      both PHP and TypeScript.
+   - A scalar literal against a backed-enum return or parameter is compared
+     against the enum's case values rather than by kind, because a string is
+     the right shape for one whatever it says. An enum with no backing values
+     has no scalar form at all, so a literal there falls through to the
+     ordinary type check and is reported as the wrong type.
 
    A named or keyword argument carries the parameter's name, so renaming a
    parameter leaves it pointing at nothing while the argument count stays
@@ -194,11 +199,14 @@ is listed in `unparsable_fixtures`. Neither makes the scan partial.
      one is configuration that never takes effect. Reported as a `warning`,
      since the double itself is still valid.
 
-   - A getter or setter is not a function, so spying on one needs an access
-     type (`vi.spyOn(obj, 'x', 'get')`). Without it the framework looks for a
-     function, finds a property, and throws. A getter and setter sharing a
-     name are recorded as one member, and the getter wins, since it describes
-     what reading the member yields.
+   - A getter or setter is not a function, so doubling one needs an access
+     type (`vi.spyOn(obj, 'x', 'get')`) or, for a Python `@property`,
+     `new_callable=PropertyMock`. Without it the framework replaces the
+     descriptor and the member stops behaving like a property. A getter and
+     setter sharing a name are recorded as one member, and the getter wins,
+     since it describes what reading the member yields. Accessors are detected
+     from `get`/`set` in TypeScript and from `@property` and `.setter` in
+     Python.
    - `__construct`, `__destruct` and `__clone` cannot be stubbed on a PHP
      double: the framework subclasses the target and disables the original
      constructor, so it never routes through them.

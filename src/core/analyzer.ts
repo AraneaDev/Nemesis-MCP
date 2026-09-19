@@ -263,7 +263,7 @@ function classify(
     // right number of arguments and the wrong ones. Only literals are
     // compared, so a variable or a matcher such as `$this->anything()` or
     // `expect.any(String)` is passed over rather than guessed at.
-    for (const finding of argumentTypeFindings(d, m, owner, real, lines, lang)) {
+    for (const finding of argumentTypeFindings(d, m, owner, real, graph, lines, lang)) {
       findings.push(finding);
     }
 
@@ -272,6 +272,10 @@ function classify(
     // framework looks for a function, finds a property, and throws.
     const accessor = real.modifiers?.find((x) => x === 'get' || x === 'set');
     if (accessor && !d.accessType && !suppressed(lines, m.line)) {
+      const remedy =
+        lang === 'python'
+          ? 'needs `new_callable=PropertyMock`'
+          : `needs an access type such as '${accessor}'`;
       findings.push({
         file: d.file,
         line: m.line,
@@ -280,7 +284,7 @@ function classify(
         evidence: 'typed',
         double_type: d.framework,
         target: `${owner.name}::${m.name}`,
-        message: `'${m.name}' is a ${accessor === 'get' ? 'getter' : 'setter'} on '${owner.name}', so spying on it needs an access type such as '${accessor}'.`,
+        message: `'${m.name}' is a ${accessor === 'get' ? 'getter' : 'setter'} on '${owner.name}', so doubling it ${remedy}.`,
       });
     }
 
@@ -319,7 +323,25 @@ function classify(
         // `.email` is a stale double that nothing else would catch.
         findings.push(...structuralFieldFindings(d, m, owner, declared, graph, lines, lang));
       } else {
-        if (stubType && !typesCompatible(stubType, declared, lang)) {
+        const enumHit =
+          d.returnExpr !== null ? enumLiteralCheck(graph, declared, d.returnExpr, d) : null;
+        if (enumHit === 'ok') {
+          // A valid case value; the kind comparison below would reject it.
+        } else if (enumHit) {
+          if (!suppressed(lines, m.line)) {
+            findings.push({
+              file: d.file,
+              line: m.line,
+              type: 'RETURN_DRIFT',
+              confidence: 'definite',
+              evidence: 'typed',
+              double_type: d.framework,
+              target: `${owner.name}::${m.name}`,
+              message: `Stub returns ${d.returnExpr?.trim()} but that is not a case of ${enumHit.enumName}.${enumHit.suggestion ? ` Did you mean '${enumHit.suggestion}'?` : ''}`,
+              ...(enumHit.suggestion ? { suggestion: enumHit.suggestion } : {}),
+            });
+          }
+        } else if (stubType && !typesCompatible(stubType, declared, lang)) {
           // Two named types that simply differ may still be related by
           // inheritance, and the base class usually lives in a dependency
           // directory this tool never walks. Report it, but not as blocking.
@@ -759,6 +781,7 @@ function argumentTypeFindings(
   m: { name: string; line: number },
   owner: TypeSymbol,
   real: MethodSymbol,
+  graph: SymbolGraph,
   lines: string[],
   lang: string,
 ): Finding[] {
@@ -803,6 +826,24 @@ function argumentTypeFindings(
     if (!param.type || isUntypedSide(param.type)) continue;
     const literal = inferType(argument, lang);
     if (!literal) continue; // variable, matcher, call: nothing to compare
+
+    const enumHit = enumLiteralCheck(graph, param.type, argument, d);
+    if (enumHit === 'ok') continue;
+    if (enumHit) {
+      findings.push({
+        file: d.file,
+        line: m.line,
+        type: 'ARITY_MISMATCH',
+        confidence: 'definite',
+        evidence: 'typed',
+        double_type: d.framework,
+        target: `${owner.name}::${m.name}`,
+        message: `Argument ${index + 1} is ${argument.trim()} but that is not a case of ${enumHit.enumName}.${enumHit.suggestion ? ` Did you mean '${enumHit.suggestion}'?` : ''}`,
+        ...(enumHit.suggestion ? { suggestion: enumHit.suggestion } : {}),
+      });
+      continue;
+    }
+
     if (typesCompatible(literal, param.type, lang)) continue;
     findings.push({
       file: d.file,
@@ -953,3 +994,57 @@ function nearestName(key: string, candidates: Set<string>): string | null {
 
 /** PHP members a mocking framework cannot route through. */
 const UNSTUBBABLE_PHP_MEMBERS = new Set(['__construct', '__destruct', '__clone']);
+
+/**
+ * A literal against a declared type that is a backed enum. A string is the
+ * right shape for one whatever it says, so comparing kinds reports every
+ * correct value as drift; what decides is whether the value is a case the
+ * enum still has.
+ *
+ * Returns null when the declared type is not a backed enum the graph knows,
+ * `'ok'` when the literal is a case, and the enum plus a suggestion otherwise.
+ */
+function enumLiteralCheck(
+  graph: SymbolGraph,
+  declared: string,
+  literal: string,
+  d: TestDouble,
+): 'ok' | { enumName: string; suggestion: string | null } | null {
+  // Only a scalar literal carries a backing value. `Status.Closed` is a
+  // member reference, checked against the case names elsewhere, and treating
+  // it as a backing value reported every correct one as missing.
+  const kind = inferType(literal, d.language);
+  if (kind !== 'string' && kind !== 'int' && kind !== 'float' && kind !== 'number') {
+    return null;
+  }
+
+  const alternatives_ = alternatives(declared);
+  if (alternatives_.length !== 1) return null;
+  const canonical = canon(alternatives_[0] ?? '');
+  if (canonical.kind !== 'nominal') return null;
+
+  const type = resolveType(graph, canonical.name ?? '', {
+    language: d.language,
+    fromFile: d.file,
+  });
+  if (type?.kind !== 'enum' || !type.fields) return null;
+
+  const backing = [...type.fields.values()]
+    .map((f) => f.value)
+    .filter((v): v is string => v !== undefined);
+  if (backing.length === 0) return null; // a pure case list carries no scalar
+
+  const written = literal.trim().replace(/^(['"`])([\s\S]*)\1$/, '$2');
+  if (backing.includes(written)) return 'ok';
+
+  let suggestion: string | null = null;
+  let best = Infinity;
+  for (const candidate of backing) {
+    const distance = similarity(written, candidate);
+    if (distance <= Math.max(2, Math.floor(written.length * 0.4)) && distance < best) {
+      best = distance;
+      suggestion = candidate;
+    }
+  }
+  return { enumName: type.name, suggestion };
+}
