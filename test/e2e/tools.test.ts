@@ -111,13 +111,18 @@ describe('audit and verify-symbol agree', () => {
       line: number;
       type: string;
       target: string;
+      double_type: string;
     }>;
     expect(violations.length).toBeGreaterThan(0);
 
     const key = (v: { file: string; line: number; type: string; target: string }) =>
       `${v.file}:${v.line}:${v.type}:${v.target}`;
-    const fromAudit = new Set(violations.map(key));
-    const symbols = [...new Set(violations.map((v) => v.target.split('::')[0]))];
+    // A manual mock in `__mocks__` belongs to a module rather than to a
+    // symbol, so verify-symbol, which is asked about one symbol, never
+    // reports it. Everything else has to line up.
+    const attributable = violations.filter((v) => v.double_type !== 'manual_mock');
+    const fromAudit = new Set(attributable.map(key));
+    const symbols = [...new Set(attributable.map((v) => v.target.split('::')[0]))];
 
     const fromVerify = new Set<string>();
     for (const symbol of symbols) {

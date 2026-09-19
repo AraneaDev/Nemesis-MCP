@@ -78,3 +78,50 @@ describe('a module replaced wholesale', () => {
     expect((await run(source, EXPORTS))[0]?.type).toBe('GHOST_METHOD');
   });
 });
+
+describe('a manual mock in a __mocks__ directory', () => {
+  async function mocks(
+    real: Set<string> | null,
+    fake: Set<string> | null,
+    fakePath = 'src/__mocks__/api.ts',
+  ) {
+    const graph = emptyGraph();
+    graph.exportsByFile.set('src/api.ts', real);
+    graph.exportsByFile.set(fakePath, fake);
+    return analyzeDoubles({
+      doubles: [],
+      graph,
+      fileLines: new Map(),
+      options: { strictness: 'all' },
+    });
+  }
+
+  it('reports an export the real module does not have', async () => {
+    const found = await mocks(new Set(['fetchUser']), new Set(['fetchUser', 'getUser']));
+    expect(found[0]?.message).toContain("exports 'getUser', which 'src/api.ts' does not");
+  });
+
+  it('accepts a mock that covers only part of the module', async () => {
+    // Exporting a subset is the point of a manual mock.
+    expect(await mocks(new Set(['fetchUser', 'saveUser']), new Set(['fetchUser']))).toEqual([]);
+  });
+
+  it('says nothing about a package mock, which has no sibling file', async () => {
+    const graph = emptyGraph();
+    graph.exportsByFile.set('__mocks__/axios.ts', new Set(['get']));
+    expect(
+      analyzeDoubles({ doubles: [], graph, fileLines: new Map(), options: { strictness: 'all' } }),
+    ).toEqual([]);
+  });
+
+  it('says nothing when either side re-exports everything', async () => {
+    expect(await mocks(null, new Set(['getUser']))).toEqual([]);
+    expect(await mocks(new Set(['fetchUser']), null)).toEqual([]);
+  });
+
+  it('leaves a default and the test-only handles alone', async () => {
+    expect(
+      await mocks(new Set(['fetchUser']), new Set(['fetchUser', 'default', '__reset'])),
+    ).toEqual([]);
+  });
+});

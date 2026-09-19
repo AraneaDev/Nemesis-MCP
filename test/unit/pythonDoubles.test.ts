@@ -144,3 +144,30 @@ describe('bound method parameters', () => {
     ]);
   });
 });
+
+describe('patch.multiple', () => {
+  it('reads every keyword as a member that has to exist', async () => {
+    const [d] = await extractPythonDoubles(
+      't.py',
+      'def test_x(mocker):\n    mocker.patch.multiple(Vault, seal=mocker.DEFAULT, unseal=mocker.DEFAULT)\n',
+    );
+    expect(d?.targetSymbol).toBe('Vault');
+    expect(d?.methods.map((m) => m.name)).toEqual(['seal', 'unseal']);
+  });
+
+  it("leaves patch's own keywords out of the member list", async () => {
+    const [d] = await extractPythonDoubles(
+      't.py',
+      'def test_x(mocker):\n    mocker.patch.multiple(Vault, autospec=True, create=False, seal=mocker.DEFAULT)\n',
+    );
+    expect(d?.methods.map((m) => m.name)).toEqual(['seal']);
+  });
+
+  it('records nothing when there is no member to name', async () => {
+    const doubles = await extractPythonDoubles(
+      't.py',
+      'def test_x(mocker):\n    mocker.patch.multiple(Vault, autospec=True)\n',
+    );
+    expect(doubles).toEqual([]);
+  });
+});

@@ -786,6 +786,7 @@ export function analyzeDoubles(input: AnalyzeInput): Finding[] {
       symbolsByFile.set(variant.file, names);
     }
   }
+  findings.push(...manualMockFindings(input.graph));
   for (const d of input.doubles) {
     const lines = input.fileLines.get(d.file) ?? [];
     findings.push(...classify(d, input.graph, lines, reportedFinalTargets, symbolsByFile));
@@ -1265,6 +1266,44 @@ function literalUnionCheck(
 const IMPORT_NAMED = /^\s*import\s+(?:type\s+)?\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]/;
 const IMPORT_DEFAULT = /^\s*import\s+(?:type\s+)?([A-Za-z_$][\w$]*)\s+from\s*['"]([^'"]+)['"]/;
 const EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs'];
+
+/**
+ * A manual mock in `__mocks__` stands in for the module beside its directory,
+ * and the names it exports are what the test believes that module exports. An
+ * export the real module does not have is dead: nothing imports it, and the
+ * fake is loaded in place of a module that never had it.
+ *
+ * Exporting a subset is the point of a manual mock, so only the surplus is
+ * reported. A `__mocks__` file with no sibling names a package rather than a
+ * file, and packages are not this scan's to account for.
+ */
+function manualMockFindings(graph: SymbolGraph): Finding[] {
+  const findings: Finding[] = [];
+  for (const [file, exports] of graph.exportsByFile) {
+    if (!exports) continue;
+    const match = /^(.*)__mocks__\/([^/]+)$/.exec(file);
+    if (!match) continue;
+    const real = `${match[1]}${match[2]}`;
+    const realExports = graph.exportsByFile.get(real);
+    if (!realExports) continue;
+    for (const name of exports) {
+      if (name === 'default' || name.startsWith('__') || realExports.has(name)) continue;
+      const suggestion = nearestName(name, realExports);
+      findings.push({
+        file,
+        line: 1,
+        type: 'GHOST_METHOD',
+        confidence: 'definite',
+        evidence: 'typed',
+        double_type: 'manual_mock',
+        target: `${real}::${name}`,
+        message: `The manual mock exports '${name}', which '${real}' does not.${suggestion ? ` Did you mean '${suggestion}'?` : ''}`,
+        ...(suggestion ? { suggestion } : {}),
+      });
+    }
+  }
+  return findings;
+}
 
 /**
  * A module replaced wholesale supplies a key per export it stands in for.

@@ -165,6 +165,38 @@ export async function extractPythonDoubles(relFile: string, source: string): Pro
       continue;
     }
 
+    // patch.multiple(Type, save=DEFAULT, find=DEFAULT): every keyword names a
+    // member that has to exist, and `patch` raises AttributeError for one that
+    // does not. Nothing was read out of these at all.
+    if (/^(\w+\.)?patch\.multiple$/.test(fnText) && first) {
+      if (first.type === 'identifier' || first.type === 'attribute') {
+        const line = node.startPosition.row + 1;
+        const members: Array<{ name: string; line: number }> = [];
+        for (const c of argsNode) {
+          if (c.type !== 'keyword_argument') continue;
+          const name = field(c, 'name')?.text;
+          if (name && !PATCH_KEYWORDS.has(name)) members.push({ name, line });
+        }
+        if (members.length > 0) {
+          doubles.push({
+            framework,
+            language: 'python',
+            file: relFile,
+            line,
+            targetSymbol: first.text,
+            method: members[0]?.name ?? null,
+            methods: members,
+            withArity: null,
+            assertedArity: null,
+            returnTypeHint: null,
+            returnExpr: null,
+            confidence: 'definite',
+          });
+        }
+      }
+      continue;
+    }
+
     // An assignment such as `m = Mock(spec=Client)` is recorded by the
     // assignment branch above; matching the call again here produced a second,
     // identical double for the same mock.
@@ -285,6 +317,18 @@ function lambdaArity(node: SyntaxNode | null): number | null {
   const skip = first && /^(self|cls)$/.test(first.text.split(/[:=]/)[0]?.trim() ?? '') ? 1 : 0;
   return declared.length - skip;
 }
+
+/** `patch`'s own keywords, which configure the patch rather than name a member. */
+const PATCH_KEYWORDS = new Set([
+  'spec',
+  'spec_set',
+  'create',
+  'autospec',
+  'new_callable',
+  'new',
+  'return_value',
+  'side_effect',
+]);
 
 function keywordValue(call: SyntaxNode, name: string): SyntaxNode | null {
   const args = field(call, 'arguments');
