@@ -17,7 +17,15 @@ class LedgerTest extends TestCase
         // Mockery says the same thing inside the class string.
         $mockery = Mockery::mock('Experiments\PartialMock\Ledger[post,reconcile]');
 
+        // A configured mock names a member per key and pins its return value
+        // in the same breath, so both can have drifted.
+        $configured = $this->createConfiguredMock(Ledger::class, [
+            'balance' => '0',
+            'reconcile' => true,
+        ]);
+
         $this->assertNotNull($phpunit);
         $this->assertNotNull($mockery);
+        $this->assertNotNull($configured);
     }
 }

@@ -140,6 +140,34 @@ function staticTarget(node: SyntaxNode): string | null {
   return cleaned || null;
 }
 
+/**
+ * `createConfiguredMock(X, ['open' => true])` names a member per key and pins
+ * its return value in the same breath, which is two contracts in one literal
+ * and neither of them was read.
+ */
+function configuredMembers(
+  node: SyntaxNode,
+): Array<{ name: string; line: number; returnExpr: string }> {
+  const name = field(node, 'name')?.text ?? '';
+  if (name !== 'createConfiguredMock' && name !== 'createConfiguredStub') return [];
+  const argument = field(node, 'arguments')?.namedChildren[1];
+  const array = argument?.type === 'argument' ? (argument.namedChildren[0] ?? argument) : argument;
+  if (!array || array.type !== 'array_creation_expression') return [];
+  const out: Array<{ name: string; line: number; returnExpr: string }> = [];
+  for (const element of array.namedChildren) {
+    const parts = element.namedChildren;
+    const key = parts[0];
+    const value = parts[1];
+    // A key built at runtime names nothing this can check.
+    if (!key || !value || key.type !== 'string') continue;
+    const member = unquote(key.text);
+    if (member) {
+      out.push({ name: member, line: element.startPosition.row + 1, returnExpr: value.text });
+    }
+  }
+  return out;
+}
+
 /** The members named inside a Mockery `'Foo[a,b]'` partial mock string. */
 function partialMethods(node: SyntaxNode, line: number): Array<{ name: string; line: number }> {
   const first = field(node, 'arguments')?.namedChildren[0];
@@ -186,7 +214,11 @@ function factoryOf(node: SyntaxNode | null): FactoryHit | null {
   }
   if (node.type === 'member_call_expression') {
     const name = field(node, 'name')?.text ?? '';
-    if (/^(createMock|createStub|createPartialMock|getMockBuilder)$/.test(name)) {
+    if (
+      /^(createMock|createStub|createPartialMock|createConfiguredMock|createConfiguredStub|getMockBuilder|getMockForAbstractClass|getMockForTrait)$/.test(
+        name,
+      )
+    ) {
       const target = staticTarget(node);
       if (target) {
         return {
@@ -211,6 +243,23 @@ function factoryOf(node: SyntaxNode | null): FactoryHit | null {
  * `addMethods` is deliberately excluded: it exists to add members the class
  * does *not* declare, so reporting those would be backwards.
  */
+/** Walk the chain to the factory and read its configured members. */
+function configuredMembersIn(
+  node: SyntaxNode,
+): Array<{ name: string; line: number; returnExpr: string }> {
+  let cur: SyntaxNode | null = node;
+  for (let i = 0; i < 32 && cur; i++) {
+    if (cur.type === 'member_call_expression' || cur.type === 'method_call_expression') {
+      const found = configuredMembers(cur);
+      if (found.length > 0) return found;
+      cur = field(cur, 'object');
+      continue;
+    }
+    cur = null;
+  }
+  return [];
+}
+
 function mockeryPartials(node: SyntaxNode): Array<{ name: string; line: number }> {
   let cur: SyntaxNode | null = node;
   for (let i = 0; i < 32 && cur; i++) {
@@ -311,6 +360,24 @@ export async function extractPhpDoubles(relFile: string, source: string): Promis
               assertedArity: null,
               returnTypeHint: null,
               returnExpr: null,
+              confidence: 'definite',
+            });
+          }
+          // One double per configured member, so each return value is checked
+          // against the type that member declares.
+          for (const member of configuredMembersIn(right)) {
+            doubles.push({
+              framework: hit.framework,
+              language: 'php',
+              file: relFile,
+              line: member.line,
+              targetSymbol: hit.target,
+              method: member.name,
+              methods: [{ name: member.name, line: member.line }],
+              withArity: null,
+              assertedArity: null,
+              returnTypeHint: null,
+              returnExpr: member.returnExpr,
               confidence: 'definite',
             });
           }

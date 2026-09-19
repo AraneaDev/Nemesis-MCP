@@ -12,4 +12,9 @@ class Ledger
     public function settle(): void
     {
     }
+
+    public function balance(): int
+    {
+        return 0;
+    }
 }

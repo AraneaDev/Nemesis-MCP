@@ -232,3 +232,37 @@ describe('magic methods', () => {
     expect(d?.methods.map((m) => m.name)).toEqual(['anything']);
   });
 });
+
+describe('a configured mock', () => {
+  it('names a member per key and pins its return value', async () => {
+    const doubles = await extractPhpDoubles(
+      'T.php',
+      `<?php $m = $this->createConfiguredMock(Ledger::class, ['post' => true, 'balance' => 0]);`,
+    );
+    expect(doubles.map((d) => [d.method, d.returnExpr])).toEqual([
+      ['post', 'true'],
+      ['balance', '0'],
+    ]);
+  });
+
+  it('skips a key built at runtime', async () => {
+    const doubles = await extractPhpDoubles(
+      'T.php',
+      `<?php $m = $this->createConfiguredMock(Ledger::class, [$dynamic => true]);`,
+    );
+    expect(doubles).toEqual([]);
+  });
+
+  it('recognises the abstract and trait factories too', async () => {
+    const [abstract] = await extractPhpDoubles(
+      'T.php',
+      `<?php $m = $this->getMockForAbstractClass(Ledger::class); $m->method('post')->willReturn(true);`,
+    );
+    expect(abstract?.targetSymbol).toBe('Ledger');
+    const [trait] = await extractPhpDoubles(
+      'T.php',
+      `<?php $m = $this->getMockForTrait(Countable::class); $m->method('count')->willReturn(1);`,
+    );
+    expect(trait?.targetSymbol).toBe('Countable');
+  });
+});
