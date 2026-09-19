@@ -170,3 +170,65 @@ describe('queued return values', () => {
     expect(found[0]?.returnExpr).toBe('7');
   });
 });
+
+describe('partial mocks that name their members', () => {
+  it('reads the method list of createPartialMock', async () => {
+    const [d] = await extractPhpDoubles(
+      'T.php',
+      `<?php $m = $this->createPartialMock(Ledger::class, ['post', 'reconcile']);`,
+    );
+    expect(d?.targetSymbol).toBe('Ledger');
+    expect(d?.methods.map((m) => m.name)).toEqual(['post', 'reconcile']);
+  });
+
+  it('reads onlyMethods and setMethods off a builder chain', async () => {
+    const [only] = await extractPhpDoubles(
+      'T.php',
+      `<?php $m = $this->getMockBuilder(Ledger::class)->onlyMethods(['post'])->getMock();`,
+    );
+    expect(only?.methods.map((m) => m.name)).toEqual(['post']);
+    const [set] = await extractPhpDoubles(
+      'T.php',
+      `<?php $m = $this->getMockBuilder(Ledger::class)->setMethods(['settle'])->getMock();`,
+    );
+    expect(set?.methods.map((m) => m.name)).toEqual(['settle']);
+  });
+
+  it('leaves addMethods alone', async () => {
+    // `addMethods` exists to add members the class does not declare, so
+    // reporting them as missing would be backwards.
+    const doubles = await extractPhpDoubles(
+      'T.php',
+      `<?php $m = $this->getMockBuilder(Ledger::class)->addMethods(['brandNew'])->getMock();`,
+    );
+    expect(doubles).toEqual([]);
+  });
+
+  it('skips a name built at runtime', async () => {
+    const doubles = await extractPhpDoubles(
+      'T.php',
+      `<?php $m = $this->createPartialMock(Ledger::class, [$dynamic]);`,
+    );
+    expect(doubles).toEqual([]);
+  });
+
+  it("reads Mockery's bracketed partial and drops the brackets from the target", async () => {
+    const [d] = await extractPhpDoubles(
+      'T.php',
+      `<?php $m = Mockery::mock('App\\Ledger[post,settle]');`,
+    );
+    expect(d?.targetSymbol).toBe('App\\Ledger');
+    expect(d?.methods.map((m) => m.name)).toEqual(['post', 'settle']);
+  });
+});
+
+describe('magic methods', () => {
+  it('records __call as a declared member so the analyzer can see it', async () => {
+    const [d] = await extractPhpDoubles(
+      'T.php',
+      `<?php $m = Mockery::mock(Bag::class); $m->shouldReceive('anything')->andReturn(1);`,
+    );
+    expect(d?.framework).toBe('Mockery');
+    expect(d?.methods.map((m) => m.name)).toEqual(['anything']);
+  });
+});

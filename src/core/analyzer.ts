@@ -144,6 +144,14 @@ function classify(
     // `this.x = ...` in its constructor declares `x` as a field, not a method.
     if (!real && owner.fields?.has(m.name)) continue;
 
+    // A PHP class with `__call` answers to any method name, and Mockery builds
+    // a proxy that routes through it, so the member is there at runtime.
+    // PHPUnit is the other way round: it generates a subclass carrying only
+    // the declared methods and refuses to configure anything else, so the same
+    // stub really is broken there.
+    if (!real && lang === 'php' && MOCKERY_FRAMEWORKS.has(d.framework) && owner.methods.has('__call'))
+      continue;
+
     if (!real && !owner.unknownMembers.has(m.name)) {
       const suggestion = suggestMember(owner, m.name);
       // A member missing from a type whose ancestry runs outside the scanned
@@ -1142,6 +1150,9 @@ function nearestName(key: string, candidates: Set<string>): string | null {
 }
 
 /** PHP members a mocking framework cannot route through. */
+/** Frameworks that build a proxy rather than a subclass of the real class. */
+const MOCKERY_FRAMEWORKS = new Set(['Mockery', 'Pest', 'Pest/Mockery']);
+
 const UNSTUBBABLE_PHP_MEMBERS = new Set(['__construct', '__destruct', '__clone']);
 
 /**

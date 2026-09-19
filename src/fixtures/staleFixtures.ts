@@ -194,6 +194,12 @@ interface DtoLike {
   name: string;
   fields: Map<string, { name: string; type: string | null; required: boolean }>;
   file: string;
+  /**
+   * The class answers to property names it does not declare. A PHP `__get`
+   * makes every key valid, so a key the class does not list is not evidence
+   * of anything.
+   */
+  magicFields: boolean;
 }
 
 /** Collect DTO-like symbols from every indexer that exposes field metadata. */
@@ -206,7 +212,12 @@ function collectDtoLikes(graph: SymbolGraph): DtoLike[] {
     // the tie meant the record matched nothing at all.
     if (t.kind === 'enum') continue;
     if (t.fields && t.fields.size > 0) {
-      out.push({ name: t.name, fields: t.fields, file: t.file });
+      out.push({
+        name: t.name,
+        fields: t.fields,
+        file: t.file,
+        magicFields: t.methods.has('__get') || t.methods.has('__set'),
+      });
     }
   }
   return out;
@@ -431,7 +442,7 @@ export async function checkFixtures(
           });
         }
       }
-      for (const key of Object.keys(rec)) {
+      for (const key of owner.magicFields ? [] : Object.keys(rec)) {
         if (!owner.fields.has(key)) {
           const suggestion = suggestFieldKey(owner.fields, key);
           violations.push({

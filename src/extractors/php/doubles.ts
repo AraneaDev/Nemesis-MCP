@@ -123,14 +123,35 @@ function chainInfo(root: SyntaxNode): ChainInfo {
   return info;
 }
 
-/** Extract `Foo::class` target from call arguments. */
+/**
+ * Extract the `Foo::class` target from call arguments.
+ *
+ * Mockery writes a partial mock as `Mockery::mock('App\\Ledger[post,settle]')`,
+ * naming the members it replaces inside the string. Taken whole, that string
+ * resolved to no class at all, so those doubles were read and then quietly
+ * dropped. The bracketed names come back through `partialMethods`.
+ */
 function staticTarget(node: SyntaxNode): string | null {
   const args = field(node, 'arguments');
   const first = args?.namedChildren[0];
   if (!first) return null;
   const text = first.text.replace(/::class\s*$/i, '');
-  const cleaned = text.replace(/^['"]|['"]$/g, '');
+  const cleaned = text.replace(/^['"]|['"]$/g, '').replace(/\[[^\]]*\]\s*$/, '');
   return cleaned || null;
+}
+
+/** The members named inside a Mockery `'Foo[a,b]'` partial mock string. */
+function partialMethods(node: SyntaxNode, line: number): Array<{ name: string; line: number }> {
+  const first = field(node, 'arguments')?.namedChildren[0];
+  const text = first?.text ?? '';
+  if (!/^['"]/.test(text.trim())) return [];
+  const match = /\[([^\]]*)\]\s*['"]?\s*$/.exec(text.replace(/['"]\s*$/, ''));
+  if (!match?.[1]) return [];
+  return match[1]
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(part))
+    .map((name) => ({ name, line }));
 }
 
 interface FactoryHit {
@@ -179,6 +200,72 @@ function factoryOf(node: SyntaxNode | null): FactoryHit | null {
   return null;
 }
 
+/**
+ * Method names a partial mock lists by hand.
+ *
+ * `createPartialMock(X, ['a', 'b'])` and `->onlyMethods([...])` name members
+ * that have to exist: PHPUnit refuses to configure one that does not. They are
+ * the only statement a partial mock makes about the class, and until now they
+ * were the one kind of double the PHP tier read nothing out of.
+ *
+ * `addMethods` is deliberately excluded: it exists to add members the class
+ * does *not* declare, so reporting those would be backwards.
+ */
+function mockeryPartials(node: SyntaxNode): Array<{ name: string; line: number }> {
+  let cur: SyntaxNode | null = node;
+  for (let i = 0; i < 32 && cur; i++) {
+    if (cur.type === 'scoped_call_expression') {
+      const name = field(cur, 'name')?.text ?? '';
+      const scope = field(cur, 'scope')?.text ?? '';
+      if (scope === 'Mockery' && /^(mock|spy|instanceMock)$/.test(name)) {
+        return partialMethods(cur, cur.startPosition.row + 1);
+      }
+      cur = field(cur, 'scope');
+      continue;
+    }
+    if (cur.type === 'member_call_expression' || cur.type === 'method_call_expression') {
+      cur = field(cur, 'object');
+      continue;
+    }
+    cur = null;
+  }
+  return [];
+}
+
+function listedMethodNames(node: SyntaxNode): Array<{ name: string; line: number }> {
+  const out: Array<{ name: string; line: number }> = [];
+  const literalsOf = (argument: SyntaxNode | undefined, line: number): void => {
+    const array =
+      argument?.type === 'argument' ? (argument.namedChildren[0] ?? argument) : argument;
+    if (!array || array.type !== 'array_creation_expression') return;
+    for (const element of array.namedChildren) {
+      const text = element.text.trim();
+      // A name built at runtime is not a name this can check.
+      if (!/^['"]/.test(text)) continue;
+      const name = unquote(text);
+      if (name) out.push({ name, line });
+    }
+  };
+
+  let cur: SyntaxNode | null = node;
+  for (let i = 0; i < 32 && cur; i++) {
+    if (cur.type === 'member_call_expression' || cur.type === 'method_call_expression') {
+      const name = field(cur, 'name')?.text ?? '';
+      const args = field(cur, 'arguments');
+      const line = cur.startPosition.row + 1;
+      if (name === 'onlyMethods' || name === 'setMethods') {
+        literalsOf(args?.namedChildren[0], line);
+      } else if (name === 'createPartialMock') {
+        literalsOf(args?.namedChildren[1], line);
+      }
+      cur = field(cur, 'object');
+      continue;
+    }
+    cur = null;
+  }
+  return out;
+}
+
 export async function extractPhpDoubles(relFile: string, source: string): Promise<TestDouble[]> {
   const doubles: TestDouble[] = [];
   const parsed = await parseSource('php', source);
@@ -208,7 +295,26 @@ export async function extractPhpDoubles(relFile: string, source: string): Promis
               ? field(cur, 'object')
               : null;
         }
-        if (hit) varMap.set(left.text, hit);
+        if (hit) {
+          varMap.set(left.text, hit);
+          const listed = [...listedMethodNames(right), ...mockeryPartials(right)];
+          if (listed.length > 0) {
+            doubles.push({
+              framework: hit.framework,
+              language: 'php',
+              file: relFile,
+              line: node.startPosition.row + 1,
+              targetSymbol: hit.target,
+              method: listed[0]?.name ?? null,
+              methods: listed,
+              withArity: null,
+              assertedArity: null,
+              returnTypeHint: null,
+              returnExpr: null,
+              confidence: 'definite',
+            });
+          }
+        }
       }
       continue;
     }

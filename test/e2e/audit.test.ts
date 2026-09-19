@@ -74,12 +74,23 @@ describe('nemesis audit end-to-end', () => {
     expect(result.summary.scanned_test_files).toBeGreaterThanOrEqual(16);
     expect(result.summary.doubles_inspected).toBeGreaterThanOrEqual(16);
 
-    expect(result.summary.scanned_test_files).toBe(31);
-    expect(result.summary.doubles_inspected).toBe(50);
+    expect(result.summary.scanned_test_files).toBe(32);
+    expect(result.summary.doubles_inspected).toBe(52);
     const files = result.violations.map((v: { file: string }) => v.file);
     for (const languageDir of ['typescript', 'javascript', 'php', 'python', 'rust']) {
       expect(files.some((file: string) => file.includes(`experiments/${languageDir}/`))).toBe(true);
     }
+  }, 120_000);
+
+  it('says nothing about a PHP class whose magic methods answer to anything', () => {
+    // `__call` and `__get` make every name valid, and Mockery's proxy routes
+    // through them. Both commands have to stay quiet.
+    const audit = runCli(['audit', 'fixtures/magic-php', '--strictness=all', '--json'], root);
+    expect(audit.status).toBe(0);
+    expect(JSON.parse(audit.stdout).violations).toEqual([]);
+    const fixtures = runCli(['fixtures', 'fixtures/magic-php', '--strictness=all', '--json'], root);
+    expect(fixtures.status).toBe(0);
+    expect(JSON.parse(fixtures.stdout).violations).toEqual([]);
   }, 120_000);
 
   it('keeps a clean repository-shaped project clean', () => {
