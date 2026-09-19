@@ -3,12 +3,13 @@
 // ---------------------------------------------------------------------------
 
 import type {
+  FieldSymbol,
   MethodSymbol,
   ParamSymbol,
   SymbolGraph,
   TypeSymbol,
 } from '../../core/types.js';
-import { addType, addFunction } from '../../core/symbolGraph.js';
+import { addType, addFunction, resolveType } from '../../core/symbolGraph.js';
 import { parseSource } from '../../parser/loader.js';
 import { walk, field, typeTextOf } from '../walk.js';
 
@@ -39,6 +40,23 @@ function paramsOf(node: SyntaxNode): ParamSymbol[] {
   return params;
 }
 
+function fieldsOfStruct(node: SyntaxNode): Map<string, FieldSymbol> | null {
+  const body = field(node, 'body');
+  if (!body) return null;
+  const fields = new Map<string, FieldSymbol>();
+  for (const child of body.namedChildren) {
+    if (child.type !== 'field_declaration') continue;
+    const name = field(child, 'name')?.text;
+    if (!name) continue;
+    fields.set(name, {
+      name,
+      type: typeTextOf(child, 'type'),
+      required: true,
+    });
+  }
+  return fields.size > 0 ? fields : null;
+}
+
 function fnFromNode(node: SyntaxNode): MethodSymbol | null {
   const name = field(node, 'name')?.text;
   if (!name) return null;
@@ -56,12 +74,7 @@ export async function indexRustFile(
   source: string,
   graph: SymbolGraph,
 ): Promise<void> {
-  let parsed;
-  try {
-    parsed = await parseSource('rust', source);
-  } catch {
-    return;
-  }
+  const parsed = await parseSource('rust', source);
   const { root } = parsed;
 
   for (const { node } of walk(root)) {
@@ -98,6 +111,7 @@ export async function indexRustFile(
         kind: 'struct',
         methods: new Map(),
         unknownMembers: new Set(),
+        ...(fieldsOfStruct(node) ? { fields: fieldsOfStruct(node)! } : {}),
         extends: [],
         implements: [],
         uses: [],
@@ -117,6 +131,17 @@ export async function indexRustFile(
         uses: [],
         line: node.startPosition.row + 1,
       });
+    } else if (node.type === 'impl_item') {
+      const ownerName = field(node, 'type')?.text;
+      const owner = ownerName ? resolveType(graph, ownerName) : null;
+      const body = field(node, 'body');
+      if (owner && body) {
+        for (const child of body.namedChildren) {
+          if (child.type !== 'function_item') continue;
+          const method = fnFromNode(child);
+          if (method) owner.methods.set(method.name, method);
+        }
+      }
     } else if (node.type === 'function_item') {
       const parent = node.parent;
       if (parent?.type === 'source_file') {

@@ -4,8 +4,8 @@
 
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
-import type { LanguageId } from './types.js';
-import { isExcluded } from './ignore.js';
+import type { LanguageId, ScanDiagnostic } from './types.js';
+import { isExcluded, loadIgnoreFile } from './ignore.js';
 
 const EXT_TO_LANG: Record<string, LanguageId> = {
   '.ts': 'typescript',
@@ -58,29 +58,41 @@ export interface DiscoveredFiles {
 /** Recursively collect source files under `rootDir`, split into tests / production. */
 export async function discoverFiles(
   rootDir: string,
-  opts: { extensions?: string[]; extraExcludes?: string[] } = {},
+  opts: {
+    extensions?: string[];
+    extraExcludes?: string[];
+    diagnostics?: ScanDiagnostic[];
+    respectGitignore?: boolean;
+  } = {},
 ): Promise<DiscoveredFiles> {
   const testFiles: string[] = [];
   const productionFiles: string[] = [];
   const exts = opts.extensions ?? Object.keys(EXT_TO_LANG);
+  const patterns = opts.respectGitignore === false ? [] : loadIgnoreFile(rootDir);
 
   async function walk(dir: string): Promise<void> {
     let entries;
     try {
       entries = await readdir(dir, { withFileTypes: true });
-    } catch {
-      return; // unreadable directory: skip
+    } catch (error) {
+      opts.diagnostics?.push({
+        file: path.relative(rootDir, dir).split(path.sep).join('/') || '.',
+        stage: 'discovery',
+        message: error instanceof Error ? error.message : String(error),
+        fatal: true,
+      });
+      return;
     }
     for (const entry of entries) {
       const abs = path.join(dir, entry.name);
       const rel = path.relative(rootDir, abs).split(path.sep).join('/');
       if (entry.isDirectory()) {
-        if (isExcluded(rel, opts.extraExcludes)) continue;
+        if (isExcluded(rel, opts.extraExcludes, patterns, true)) continue;
         await walk(abs);
       } else if (entry.isFile()) {
         const lang = languageForFile(entry.name);
         if (!lang || !exts.includes(path.extname(entry.name))) continue;
-        if (isExcluded(rel, opts.extraExcludes)) continue;
+        if (isExcluded(rel, opts.extraExcludes, patterns, false)) continue;
         if (isTestFile(rel)) testFiles.push(rel);
         else productionFiles.push(rel);
       }
@@ -94,10 +106,7 @@ export async function discoverFiles(
 }
 
 /** Narrow a discovered file list down to the requested languages. */
-export function filterByLanguages(
-  files: string[],
-  languages: LanguageId[],
-): string[] {
+export function filterByLanguages(files: string[], languages: LanguageId[]): string[] {
   return files.filter((f) => {
     const lang = languageForFile(f);
     return lang !== null && languages.includes(lang);

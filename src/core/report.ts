@@ -13,6 +13,9 @@ export function renderText(result: AuditResult): string {
   if (s.skipped_languages?.length) {
     lines.push(`Skipped languages (grammar load failed): ${s.skipped_languages.join(', ')}`);
   }
+  if (s.diagnostics?.length) {
+    lines.push(`Diagnostics: ${s.diagnostics.length} (partial scan)`);
+  }
   if (result.violations.length === 0) {
     lines.push('No contract drift detected. ✓');
     return lines.join('\n');
@@ -34,9 +37,8 @@ export function renderJson(result: AuditResult): string {
 }
 
 /** CLI exit code per spec §8. */
-export function exitCodeFor(result: AuditResult, strictness: string): number {
-  if (strictness === 'breaking_only') {
-    return result.violations.length > 0 ? 1 : 0;
-  }
+export function exitCodeFor(result: AuditResult, _strictness: string): number {
+  if (result.summary.diagnostics?.some((diagnostic) => diagnostic.fatal)) return 2;
+  if (result.summary.diagnostics?.length) return 2;
   return result.violations.length > 0 ? 1 : 0;
 }

@@ -60,18 +60,16 @@ export async function loadLanguage(grammar: GrammarName): Promise<Language> {
   return lang;
 }
 
-const parserCache = new Map<GrammarName, Parser>();
-
-/** A parser bound to a grammar. Reused across files. */
+/** Create a parser bound to a cached immutable grammar.
+ *
+ * Parser instances are deliberately not shared: MCP requests may parse files
+ * concurrently and Tree-sitter Parser is mutable/native-backed.
+ */
 export async function getParser(grammar: GrammarName): Promise<Parser> {
-  let p = parserCache.get(grammar);
-  if (!p) {
-    const lang = await loadLanguage(grammar); // ensures Parser.init() completed
-    p = new Parser();
-    p.setLanguage(lang);
-    parserCache.set(grammar, p);
-  }
-  return p;
+  const lang = await loadLanguage(grammar);
+  const parser = new Parser();
+  parser.setLanguage(lang);
+  return parser;
 }
 
 export interface ParsedFile {
@@ -84,8 +82,9 @@ export interface ParsedFile {
 export async function parseSource(
   language: LanguageId,
   source: string,
+  grammar: GrammarName = LANGUAGE_GRAMMAR[language],
 ): Promise<ParsedFile> {
-  const parser = await getParser(LANGUAGE_GRAMMAR[language]);
+  const parser = await getParser(grammar);
   const tree = parser.parse(source);
   if (!tree) throw new Error(`Parsing failed for a ${language} file`);
   return { source, root: tree.rootNode, lines: source.split('\n') };

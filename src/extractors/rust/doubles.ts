@@ -13,12 +13,7 @@ export async function extractRustDoubles(
   source: string,
 ): Promise<TestDouble[]> {
   const doubles: TestDouble[] = [];
-  let parsed;
-  try {
-    parsed = await parseSource('rust', source);
-  } catch {
-    return doubles;
-  }
+  const parsed = await parseSource('rust', source);
   const { root } = parsed;
 
   for (const { node } of walk(root)) {
@@ -32,14 +27,19 @@ export async function extractRustDoubles(
         if (next) {
           const name = field(next, 'name')?.text;
           if (name) {
+            const methods = next.namedChildren
+              .filter((child) => child.type === 'function_signature_item' || child.type === 'function_item')
+              .map((child) => field(child, 'name')?.text)
+              .filter((method): method is string => Boolean(method))
+              .map((method) => ({ name: method, line: next.startPosition.row + 1 }));
             doubles.push({
               framework: 'mockall #[automock]',
               language: 'rust',
               file: relFile,
               line: node.startPosition.row + 1,
               targetSymbol: name,
-              method: null,
-              methods: [],
+              method: methods[0]?.name ?? null,
+              methods,
               withArity: null,
               assertedArity: null,
               returnTypeHint: null,
@@ -57,14 +57,18 @@ export async function extractRustDoubles(
       const macro = field(node, 'macro');
       if (macro?.text === 'mock') {
         const target = mockTarget(node);
+        const methods = [...node.text.matchAll(/\\bfn\\s+(\\w+)/g)].map((match) => ({
+          name: match[1] ?? '',
+          line: node.startPosition.row + 1,
+        })).filter((method) => method.name.length > 0);
         doubles.push({
           framework: 'mockall mock!',
           language: 'rust',
           file: relFile,
           line: node.startPosition.row + 1,
           targetSymbol: target,
-          method: null,
-          methods: [],
+          method: methods[0]?.name ?? null,
+          methods,
           withArity: null,
           assertedArity: null,
           returnTypeHint: null,

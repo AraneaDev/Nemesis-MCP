@@ -22,3 +22,7 @@ coverage/
 
 # local docs (private notes)
 docs/superpowers/
+
+# tool caches
+/.momus/
+/.superpowers/

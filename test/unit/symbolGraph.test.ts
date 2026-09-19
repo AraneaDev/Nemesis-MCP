@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { emptyGraph, resolveType, resolveMember, suggestMember, similarity } from '../../src/core/symbolGraph.js';
+import {
+  addFunction,
+  addType,
+  emptyGraph,
+  resolveMember,
+  resolveTarget,
+  resolveType,
+  suggestMember,
+  similarity,
+} from '../../src/core/symbolGraph.js';
 import type { TypeSymbol } from '../../src/core/types.js';
 
 function makeType(name: string, methods: string[] = []): TypeSymbol {
@@ -25,16 +34,37 @@ describe('symbolGraph', () => {
   it('adds and resolves types case-insensitively', () => {
     const g = emptyGraph();
     const t = makeType('App\\Services\\InvoiceService');
-    g.types.set('app\\services\\invoiceservice', t);
+    addType(g, t);
     expect(resolveType(g, 'App\\Services\\InvoiceService')).toBe(t);
     expect(resolveType(g, 'app\\services\\invoiceservice')).toBe(t);
   });
 
-  it('resolves short names uniquely', () => {
+  it('stores functions and resolves short names uniquely', () => {
     const g = emptyGraph();
+    const fn = {
+      name: 'buildInvoice',
+      returnType: null,
+      params: [],
+      visibility: 'public' as const,
+      line: 1,
+    };
+    addFunction(g, fn);
+    expect(g.functions.get('buildinvoice')).toBe(fn);
+
     const t = makeType('App\\PaymentGateway');
-    g.types.set('app\\paymentgateway', t);
+    addType(g, t);
     expect(resolveType(g, 'PaymentGateway')).toBe(t);
+  });
+
+  it('resolves local members and missing ancestors', () => {
+    const g = emptyGraph();
+    const local = makeType('Local', ['run']);
+    const child = makeType('Child');
+    child.extends.push('Missing');
+    addType(g, local);
+    addType(g, child);
+    expect(resolveMember(g, local, 'run')?.owner).toBe(local);
+    expect(resolveMember(g, child, 'run')).toBeNull();
   });
 
   it('walks implements chains when resolving members', () => {
@@ -42,12 +72,29 @@ describe('symbolGraph', () => {
     const iface = makeType('App\\Contracts\\PaymentGateway', ['chargeToken']);
     const impl = makeType('App\\StripeGateway', []);
     impl.implements.push('App\\Contracts\\PaymentGateway');
-    g.types.set('app\\contracts\\paymentgateway', iface);
-    g.types.set('app\\stripegateway', impl);
+    addType(g, iface);
+    addType(g, impl);
     const hit = resolveMember(g, impl, 'chargeToken');
     expect(hit).not.toBeNull();
     expect(hit!.owner.name).toBe('App\\Contracts\\PaymentGateway');
     expect(hit!.qualifiedName).toBe('App\\Contracts\\PaymentGateway::chargeToken');
+  });
+
+  it('resolves target syntax and missing types', () => {
+    const g = emptyGraph();
+    const t = makeType('App\\PaymentGateway', ['chargeToken']);
+    addType(g, t);
+    expect(resolveTarget(g, 'App\\PaymentGateway::chargeToken')?.member?.method.name).toBe(
+      'chargeToken',
+    );
+    expect(resolveTarget(g, 'App.PaymentGateway.chargeToken')?.member).not.toBeNull();
+    expect(resolveTarget(g, 'Missing')).toBeNull();
+    expect(resolveType(g, '')).toBeNull();
+
+    const ambiguous = emptyGraph();
+    addType(ambiguous, makeType('A\\Thing'));
+    addType(ambiguous, makeType('B\\Thing'));
+    expect(resolveType(ambiguous, 'Thing')).toBeNull();
   });
 
   it('suggests similar member names', () => {
@@ -65,5 +112,177 @@ describe('symbolGraph', () => {
     expect(similarity('abc', 'abc')).toBe(0);
     expect(similarity('abc', 'abd')).toBe(1);
     expect(similarity('', 'abc')).toBe(3);
+  });
+});
+
+describe('same-named types in one repository', () => {
+  function typeIn(file: string, name: string, methods: string[]): TypeSymbol {
+    return {
+      name,
+      file,
+      kind: 'class',
+      methods: new Map(
+        methods.map((m) => [
+          m,
+          { name: m, returnType: null, params: [], visibility: 'public', line: 1 },
+        ]),
+      ),
+      unknownMembers: new Set(),
+      extends: [],
+      implements: [],
+      uses: [],
+      line: 1,
+    };
+  }
+
+  it('keeps every variant instead of overwriting', () => {
+    // Regression: a multi-language SDK repo declares one `UsageTracker` per
+    // language; they all hashed to the same key and the last one added won,
+    // so a TypeScript test was checked against the Python class.
+    const g = emptyGraph();
+    addType(g, typeIn('sdk/python/tracker.py', 'UsageTracker', ['capture_exception']));
+    addType(g, typeIn('sdk/php/src/UsageTracker.php', 'UsageTracker', ['captureError']));
+    addType(g, typeIn('sdk/node/src/index.ts', 'UsageTracker', ['captureException']));
+    expect(g.typeVariants.get('usagetracker')).toHaveLength(3);
+  });
+
+  it('resolves to the variant matching the test language', () => {
+    const g = emptyGraph();
+    addType(g, typeIn('sdk/python/tracker.py', 'UsageTracker', ['capture_exception']));
+    addType(g, typeIn('sdk/node/src/index.ts', 'UsageTracker', ['captureException']));
+
+    const ts = resolveType(g, 'UsageTracker', {
+      language: 'typescript',
+      fromFile: 'sdk/node/tests/handlers.test.ts',
+    });
+    expect(ts?.file).toBe('sdk/node/src/index.ts');
+
+    const py = resolveType(g, 'UsageTracker', {
+      language: 'python',
+      fromFile: 'sdk/python/tests/test_tracker.py',
+    });
+    expect(py?.file).toBe('sdk/python/tracker.py');
+  });
+
+  it('treats javascript and typescript as one family', () => {
+    const g = emptyGraph();
+    addType(g, typeIn('src/Tracker.ts', 'Tracker', ['send']));
+    addType(g, typeIn('py/tracker.py', 'Tracker', ['send']));
+    const hit = resolveType(g, 'Tracker', {
+      language: 'javascript',
+      fromFile: 'tests/tracker.test.js',
+    });
+    expect(hit?.file).toBe('src/Tracker.ts');
+  });
+
+  it('never resolves across languages when the family is absent', () => {
+    const g = emptyGraph();
+    addType(g, typeIn('py/a/tracker.py', 'Tracker', ['send']));
+    addType(g, typeIn('py/b/tracker.py', 'Tracker', ['send']));
+    expect(
+      resolveType(g, 'Tracker', {
+        language: 'typescript',
+        fromFile: 'src/tracker.test.ts',
+      }),
+    ).toBeNull();
+  });
+
+  it('breaks a same-language tie by directory proximity', () => {
+    const g = emptyGraph();
+    addType(g, typeIn('fixtures/dogfood-clean/src/catalog.ts', 'CatalogService', ['findBySku']));
+    addType(g, typeIn('fixtures/dogfood-repo/src/catalog.ts', 'CatalogService', ['findBySku']));
+    const hit = resolveType(g, 'CatalogService', {
+      language: 'typescript',
+      fromFile: 'fixtures/dogfood-repo/test/catalog.test.ts',
+    });
+    expect(hit?.file).toBe('fixtures/dogfood-repo/src/catalog.ts');
+  });
+
+  it('gives up when proximity cannot break the tie', () => {
+    const g = emptyGraph();
+    addType(g, typeIn('packages/a/src/Repo.ts', 'Repo', ['find']));
+    addType(g, typeIn('packages/b/src/Repo.ts', 'Repo', ['find']));
+    expect(
+      resolveType(g, 'Repo', { language: 'typescript', fromFile: 'test/x.test.ts' }),
+    ).toBeNull();
+  });
+
+  it('resolveTarget threads the hint through', () => {
+    const g = emptyGraph();
+    addType(g, typeIn('sdk/python/tracker.py', 'UsageTracker', ['capture_exception']));
+    addType(g, typeIn('sdk/node/src/index.ts', 'UsageTracker', ['captureException']));
+    const r = resolveTarget(g, 'UsageTracker.captureException', {
+      language: 'typescript',
+      fromFile: 'sdk/node/tests/handlers.test.ts',
+    });
+    expect(r?.member?.method.name).toBe('captureException');
+  });
+});
+
+describe('python dotted patch targets', () => {
+  function pyType(file: string, name: string, methods: string[]): TypeSymbol {
+    return {
+      name,
+      file,
+      kind: 'class',
+      methods: new Map(
+        methods.map((m) => [
+          m,
+          { name: m, returnType: null, params: [], visibility: 'public', line: 1 },
+        ]),
+      ),
+      unknownMembers: new Set(),
+      extends: [],
+      implements: [],
+      uses: [],
+      line: 1,
+    };
+  }
+
+  it('does not resolve a module path to a same-named class', () => {
+    // Regression: `patch("usage_tracker.transport.urlopen")` patches a module
+    // attribute. The target `usage_tracker.transport` must not land on the
+    // class `Transport` and report every import in the module as a ghost.
+    const g = emptyGraph();
+    addType(g, pyType('usage_tracker/transport.py', 'Transport', ['send']));
+    expect(
+      resolveType(g, 'usage_tracker.transport', {
+        language: 'python',
+        fromFile: 'tests/test_transport.py',
+      }),
+    ).toBeNull();
+  });
+
+  it('still resolves a dotted path ending in a class name', () => {
+    const g = emptyGraph();
+    addType(g, pyType('src/payment.py', 'PaymentClient', ['charge']));
+    const hit = resolveType(g, 'src.payment.PaymentClient', {
+      language: 'python',
+      fromFile: 'tests/test_payment.py',
+    });
+    expect(hit?.name).toBe('PaymentClient');
+  });
+
+  it('leaves a bare class name alone', () => {
+    const g = emptyGraph();
+    addType(g, pyType('usage_tracker/transport.py', 'Transport', ['send']));
+    const hit = resolveType(g, 'Transport', {
+      language: 'python',
+      fromFile: 'tests/test_transport.py',
+    });
+    expect(hit?.name).toBe('Transport');
+  });
+
+  it('does not apply the rule to PHP namespaces', () => {
+    const g = emptyGraph();
+    addType(
+      g,
+      pyType('src/Services/InvoiceService.php', 'App\\Services\\InvoiceService', ['issue']),
+    );
+    const hit = resolveType(g, 'app\\services\\invoiceservice', {
+      language: 'php',
+      fromFile: 'tests/InvoiceServiceTest.php',
+    });
+    expect(hit?.name).toBe('App\\Services\\InvoiceService');
   });
 });

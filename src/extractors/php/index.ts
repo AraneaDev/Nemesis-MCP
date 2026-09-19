@@ -3,6 +3,7 @@
 // ---------------------------------------------------------------------------
 
 import type {
+  FieldSymbol,
   MethodSymbol,
   ParamSymbol,
   SymbolGraph,
@@ -86,6 +87,29 @@ function methodFromNode(node: SyntaxNode): MethodSymbol | null {
   };
 }
 
+function fieldsOfBody(decl: SyntaxNode): Map<string, FieldSymbol> | null {
+  const body = field(decl, 'body');
+  if (!body) return null;
+  const fields = new Map<string, FieldSymbol>();
+  for (const declaration of body.namedChildren) {
+    if (declaration.type !== 'property_declaration') continue;
+    const type = typeTextOf(declaration, 'type');
+    for (const property of declaration.namedChildren) {
+      if (property.type !== 'property_element') continue;
+      const nameNode = field(property, 'name');
+      const name = nameNode?.text ?? property.text.match(/\\$[A-Za-z_][A-Za-z0-9_]*/)?.[0];
+      if (!name) continue;
+      const cleanName = name.startsWith('$') ? name.slice(1) : name;
+      fields.set(cleanName, {
+        name: cleanName,
+        type,
+        required: !property.text.includes('=') && !declaration.text.includes('?'),
+      });
+    }
+  }
+  return fields.size > 0 ? fields : null;
+}
+
 function methodsOfBody(decl: SyntaxNode): Map<string, MethodSymbol> {
   const methods = new Map<string, MethodSymbol>();
   const body = field(decl, 'body');
@@ -118,12 +142,7 @@ export async function indexPhpFile(
   source: string,
   graph: SymbolGraph,
 ): Promise<void> {
-  let parsed;
-  try {
-    parsed = await parseSource('php', source);
-  } catch {
-    return;
-  }
+  const parsed = await parseSource('php', source);
   const { root } = parsed;
   const header = headerMap(root);
 
@@ -137,6 +156,7 @@ export async function indexPhpFile(
         kind: 'class',
         methods: methodsOfBody(node),
         unknownMembers: new Set(['__call']),
+        ...(fieldsOfBody(node) ? { fields: fieldsOfBody(node)! } : {}),
         extends: heritageNames(node, ['base_clause'], header),
         implements: heritageNames(node, ['class_interface_clause'], header),
         uses: [],
@@ -152,6 +172,7 @@ export async function indexPhpFile(
         kind: 'interface',
         methods: methodsOfBody(node),
         unknownMembers: new Set(),
+        ...(fieldsOfBody(node) ? { fields: fieldsOfBody(node)! } : {}),
         extends: heritageNames(node, ['base_clause'], header),
         implements: [],
         uses: [],

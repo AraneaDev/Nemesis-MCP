@@ -48,7 +48,7 @@ describe('nemesis fixtures end-to-end', () => {
     'flags stale fixture records',
     () => {
       const { status, stdout } = runCli(
-        ['fixtures', 'fixtures/fixtures-data', '--json'],
+        ['fixtures', 'fixtures/fixtures-data', '--strictness=all', '--json'],
         root,
       );
       expect(status).toBe(1);

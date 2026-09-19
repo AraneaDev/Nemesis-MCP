@@ -2,6 +2,7 @@
 // TypeScript/JavaScript production indexer.
 // ---------------------------------------------------------------------------
 
+import path from 'node:path';
 import type {
   FieldSymbol,
   MethodSymbol,
@@ -14,19 +15,6 @@ import { parseSource } from '../../parser/loader.js';
 import { walk, field, typeTextOf, visibilityOf } from '../walk.js';
 
 const METHOD_TYPES = new Set(['method_definition', 'method_signature', 'abstract_method_signature']);
-
-function typeAliasTarget(root: import('web-tree-sitter').Node, name: string): string | null {
-  for (const { node } of walk(root)) {
-    if (node.type === 'type_alias_declaration') {
-      const n = field(node, 'name');
-      if (n?.text === name) {
-        const v = field(node, 'value');
-        return v?.text ?? null;
-      }
-    }
-  }
-  return null;
-}
 
 /** Extract a flat field map from an object type / interface body / type literal. */
 export function fieldsFromTypeText(text: string): Map<string, FieldSymbol> | null {
@@ -64,6 +52,22 @@ export function fieldsFromTypeText(text: string): Map<string, FieldSymbol> | nul
   return fields.size > 0 ? fields : null;
 }
 
+function fieldsFromClassBody(body: import('web-tree-sitter').Node | null): Map<string, FieldSymbol> | null {
+  if (!body) return null;
+  const fields = new Map<string, FieldSymbol>();
+  for (const child of body.namedChildren) {
+    if (!['property_definition', 'field_definition', 'public_field_definition'].includes(child.type)) continue;
+    const name = field(child, 'name')?.text ?? child.namedChildren.find((n) => n.type === 'property_identifier' || n.type === 'identifier')?.text;
+    if (!name) continue;
+    fields.set(name, {
+      name,
+      type: typeTextOf(child, 'type'),
+      required: !child.text.includes('?') && !child.text.includes('='),
+    });
+  }
+  return fields.size > 0 ? fields : null;
+}
+
 interface TsDecl {
   name: string;
   kind: TypeSymbol['kind'];
@@ -76,12 +80,9 @@ export async function indexTsFile(
   source: string,
   graph: SymbolGraph,
 ): Promise<void> {
-  let parsed;
-  try {
-    parsed = await parseSource('typescript', source);
-  } catch {
-    return;
-  }
+  const ext = path.extname(relFile);
+  const grammar = ext === '.tsx' ? 'tsx' : ext === '.js' || ext === '.jsx' || ext === '.mjs' || ext === '.cjs' ? 'javascript' : 'typescript';
+  const parsed = await parseSource(grammar === 'javascript' ? 'javascript' : 'typescript', source, grammar);
   const { root } = parsed;
 
   // Pass 1: collect declarations (classes, interfaces, enums, aliases).
@@ -121,6 +122,9 @@ export async function indexTsFile(
       uses: [],
       line: d.line,
     };
+
+    const classFields = d.kind === 'class' ? fieldsFromClassBody(field(d.node, 'body')) : null;
+    if (classFields) typeSym.fields = classFields;
 
     // Heritage clauses.
     for (const { node: n } of walk(d.node)) {

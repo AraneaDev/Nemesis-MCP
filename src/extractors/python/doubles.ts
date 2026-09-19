@@ -22,21 +22,39 @@ export async function extractPythonDoubles(
   source: string,
 ): Promise<TestDouble[]> {
   const doubles: TestDouble[] = [];
-  let parsed;
-  try {
-    parsed = await parseSource('python', source);
-  } catch {
-    return doubles;
-  }
+  const parsed = await parseSource('python', source);
   const { root } = parsed;
 
   /** variable name → resolved target (from `x = mocker.patch(...)` assignments) */
   const varMap = new Map<string, { target: string; method: string | null }>();
+  const specMap = new Map<string, { target: string }>();
 
   for (const { node } of walk(root)) {
     if (node.type === 'assignment') {
       const left = field(node, 'left');
       const right = field(node, 'right');
+      if (left?.type === 'attribute' && left.text.endsWith('.return_value')) {
+        const parts = left.text.split('.');
+        const variable = parts[0];
+        const method = parts[parts.length - 2];
+        const hit = variable ? (varMap.get(variable) ?? (specMap.has(variable) ? { target: specMap.get(variable)!.target, method: null } : undefined)) : undefined;
+        if (hit && method) {
+          doubles.push({
+            framework: 'unittest.mock',
+            language: 'python',
+            file: relFile,
+            line: node.startPosition.row + 1,
+            targetSymbol: hit.target,
+            method,
+            methods: [{ name: method, line: node.startPosition.row + 1 }],
+            withArity: null,
+            assertedArity: null,
+            returnTypeHint: null,
+            returnExpr: right?.text ?? null,
+            confidence: 'definite',
+          });
+        }
+      }
       if (left?.type === 'identifier' && right?.type === 'call') {
         const fn = field(right, 'function');
         const fnText = fn?.text ?? '';
@@ -56,6 +74,25 @@ export async function extractPythonDoubles(
           }
           if (target) {
             varMap.set(left.text, { target, method });
+          }
+        } else if (/^(Async)?Magic?Mock$|^(Async)?Mock$/.test(fnText)) {
+          const spec = keywordValue(right, 'spec') ?? keywordValue(right, 'spec_set');
+          if (spec && (spec.type === 'identifier' || spec.type === 'attribute')) {
+            specMap.set(left.text, { target: spec.text });
+            doubles.push({
+              framework: 'unittest.mock',
+              language: 'python',
+              file: relFile,
+              line: node.startPosition.row + 1,
+              targetSymbol: spec.text,
+              method: null,
+              methods: [],
+              withArity: null,
+              assertedArity: null,
+              returnTypeHint: null,
+              returnExpr: null,
+              confidence: 'definite',
+            });
           }
         }
       }
@@ -165,7 +202,10 @@ export async function extractPythonDoubles(
       let hit: { target: string; method: string | null } | null = null;
       if (obj?.type === 'attribute' || obj?.type === 'identifier' || obj?.type === 'subscript') {
         const name = obj.type === 'identifier' ? obj.text : (obj.type === 'attribute' ? field(obj, 'attribute')?.text ?? null : null);
-        if (name) hit = varMap.get(name) ?? null;
+        if (name) {
+          hit = varMap.get(name) ?? null;
+          if (!hit && specMap.has(name)) hit = { target: specMap.get(name)!.target, method: null };
+        }
       }
       if (hit) {
         doubles.push({

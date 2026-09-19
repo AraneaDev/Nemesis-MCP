@@ -1,0 +1,12 @@
+export default {
+  config: {
+    default: true,
+    MD013: false,
+    MD024: false,
+    MD033: false,
+    MD034: false,
+    MD041: false,
+    MD040: false,
+  },
+  ignores: ['node_modules/**', 'dist/**', 'coverage/**', 'docs/audits/**'],
+};

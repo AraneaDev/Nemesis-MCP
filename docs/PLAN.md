@@ -53,16 +53,19 @@ test/
 ## Phases
 
 ### Phase 0 — Scaffold
+
 - `package.json` (deps: web-tree-sitter, tree-sitter-wasms, @modelcontextprotocol/sdk, zod, yaml, vitest; dev: typescript, @types/node, tsx).
 - `tsconfig.json`, `.gitignore` (+ `docs/superpowers/`), npm install.
 - **Verify:** `tsc --noEmit` passes on empty barrel.
 
 ### Phase 1 — Core types + parsing infra
+
 - `core/types.ts`, `parser/loader.ts` (lazy WASM loader + query helper),
   `parser/queries.ts` stubs, `core/ignore.ts`, `core/discovery.ts`.
 - **Verify:** loader parses a TS/PHP/PY/RS snippet in vitest.
 
 ### Phase 2 — Symbol graph + resolver
+
 - Production indexers per language building `SymbolGraph`
   (classes/interfaces/traits/enums/functions/methods, params with defaults/
   variadics/promoted props, return types, extends/implements/uses edges).
@@ -72,6 +75,7 @@ test/
   interface-through-implementation, unknown → did-you-mean.
 
 ### Phase 3 — Double extractors (four languages)
+
 - TS: `vi.spyOn|jest.spyOn`, `vi.fn|jest.fn` with `as Foo`/`: Foo`, inline stub
   objects in `Object.assign`, component props, `mockReturnValue(…)`,
   `mockResolvedValue(…)` vs `Promise<T>`, `mockImplementation` returns,
@@ -86,26 +90,31 @@ test/
 - **Verify:** extractor unit tests per language over fixture files.
 
 ### Phase 4 — Analyzer + reporting
+
 - Four classifiers per spec §5, confidence + suppression
   (`nemesis-ignore`), severity mapping, deterministic ordering, exit codes.
 - **Verify:** unit tests per violation type; suppression test.
 
 ### Phase 5 — CLI + runtime
+
 - `nemesis audit|verify-symbol|fixtures` with `--json`, `--strictness`,
   `--include/--exclude`, `--lang`; text render + exit codes 0/1/2.
 - **Verify:** e2e runs against `test/fixtures/*` with asserted JSON payloads.
 
 ### Phase 6 — Fixtures tool (`nemesis_stale_fixtures`)
+
 - JSON/YAML fixture → nearest DTO/class shape; missing required fields,
   removed fields, did-you-mean renames.
 - **Verify:** fixture-data tests.
 
 ### Phase 7 — MCP server
+
 - `nemesis-mcp --serve` over stdio; registerTool × 3 with zod schemas; shared
   runtime with CLI.
 - **Verify:** stdio smoke test (list tools + audit call).
 
 ### Phase 8 — Docs + hardening + commits
+
 - README (usage, tool docs, agent workflows incl. Chaos/Momus CI slot), tune
   per-file budget, full test run.
 - Commits (each phase = one commit):

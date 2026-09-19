@@ -14,8 +14,15 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint:code": "npm run typecheck && prettier --check \"prettier.config.mjs\" \"vitest.config.ts\" \"test/unit/report.test.ts\" \"test/unit/symbolGraph.test.ts\" \"test/unit/parserConcurrency.test.ts\" \"fixtures/dogfood-*/**/*.ts\" \"*.{json,yml,yaml}\"",
+    "lint:docs": "markdownlint-cli2 \"README.md\" \"docs/**/*.md\"",
+    "lint": "npm run lint:code && npm run lint:docs",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\" \"docs/**/*.md\" README.md \"*.{json,yml,yaml}\"",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:coverage:all": "vitest run --coverage --config vitest.all.config.ts",
+    "quality": "npm run lint && npm run test:coverage && npm run test:coverage:all",
     "start": "node dist/mcp/main.js --serve"
   },
   "dependencies": {
@@ -26,7 +33,12 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@eslint/js": "^9.35.0",
     "@types/node": "^24",
+    "@vitest/coverage-v8": "^5.0.1",
+    "eslint": "^9.35.0",
+    "markdownlint-cli2": "^0.18.1",
+    "prettier": "^3.6.2",
     "tsx": "^4",
     "typescript": "^7.0.2",
     "vitest": "^5.0.1"

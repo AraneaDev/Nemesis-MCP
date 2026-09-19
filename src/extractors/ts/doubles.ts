@@ -2,6 +2,7 @@
 // Vitest / Jest double extractor (TS + JS), with variable type tracking.
 // ---------------------------------------------------------------------------
 
+import path from 'node:path';
 import type { TestDouble } from '../../core/types.js';
 import { parseSource } from '../../parser/loader.js';
 import { walk, field, unquote } from '../walk.js';
@@ -114,7 +115,7 @@ function literalType(expr: string | null): string | null {
 }
 
 const RETURN_SETTERS = /^mock(ResolvedValue|ReturnValue|ResolvedValueOnce|ReturnValueOnce)$/;
-const ARITY_ASSERTIONS = /^(toHaveBeenCalledWith|toBeCalledWith|toHaveBeenCalledTimes|toBeCalledTimes)$/;
+const ARITY_ASSERTIONS = /^(toHaveBeenCalledWith|toBeCalledWith)$/;
 
 export interface TsDoublesResult {
   doubles: TestDouble[];
@@ -126,12 +127,9 @@ export async function extractTsDoubles(
   language: 'typescript' | 'javascript',
 ): Promise<TsDoublesResult> {
   const doubles: TestDouble[] = [];
-  let parsed;
-  try {
-    parsed = await parseSource(language, source);
-  } catch {
-    return { doubles };
-  }
+  const ext = path.extname(relFile);
+  const grammar = ext === '.tsx' ? 'tsx' : language === 'javascript' ? 'javascript' : 'typescript';
+  const parsed = await parseSource(language, source, grammar);
   const { root } = parsed;
 
   // Pass 1: variable declared types (`const service = new UserService()`).

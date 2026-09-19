@@ -7,10 +7,7 @@ export type LanguageId = 'typescript' | 'javascript' | 'php' | 'python' | 'rust'
 export type Strictness = 'all' | 'untyped_only' | 'breaking_only';
 
 export type ViolationType =
-  | 'GHOST_METHOD'
-  | 'ARITY_MISMATCH'
-  | 'RETURN_DRIFT'
-  | 'VISIBILITY_BREACH';
+  'GHOST_METHOD' | 'ARITY_MISMATCH' | 'RETURN_DRIFT' | 'VISIBILITY_BREACH';
 
 export type Confidence = 'definite' | 'warning';
 
@@ -73,6 +70,8 @@ export interface FieldSymbol {
 export interface SymbolGraph {
   /** Fully qualified (lower-cased for lookup) name → symbol. */
   types: Map<string, TypeSymbol>;
+  /** Every symbol sharing a lookup key, so same-named types never overwrite. */
+  typeVariants: Map<string, TypeSymbol[]>;
   /** Free functions, lower-cased name → symbol. */
   functions: Map<string, MethodSymbol>;
   /** Languages whose grammars failed to load; reported in the summary. */
@@ -104,16 +103,28 @@ export interface TestDouble {
 }
 
 /** A finding produced by the drift analyzer. */
+export type FindingEvidence = 'typed' | 'untyped' | 'heuristic';
+
 export interface Finding {
   file: string;
   line: number;
   endLine?: number | undefined;
   type: ViolationType;
   confidence: Confidence;
+  /** Evidence category used by strictness filtering. */
+  evidence?: FindingEvidence;
   double_type: string;
   target: string;
   message: string;
   suggestion?: string | undefined;
+}
+
+export interface ScanDiagnostic {
+  file?: string;
+  language?: LanguageId;
+  stage: 'discovery' | 'read' | 'parse' | 'index' | 'extract' | 'fixture' | 'budget';
+  message: string;
+  fatal: boolean;
 }
 
 export interface AuditSummary {
@@ -121,6 +132,8 @@ export interface AuditSummary {
   doubles_inspected: number;
   violations_count: number;
   skipped_languages?: LanguageId[];
+  diagnostics?: ScanDiagnostic[];
+  partial?: boolean;
 }
 
 export interface AuditResult {
@@ -131,8 +144,6 @@ export interface AuditResult {
 export interface AnalyzeOptions {
   strictness: Strictness;
   languages: LanguageId[];
-  /** Extra files (from `paths` params) to treat as test roots. */
-  testRoots?: string[];
   /** Callback for stderr-style notices (grammar load failures etc.). */
   notice?: (message: string) => void;
 }

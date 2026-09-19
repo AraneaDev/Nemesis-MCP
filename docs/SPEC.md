@@ -21,6 +21,7 @@ the analysis is purely syntactic and semantic-lite.
 ## 2. Goals & Non-Goals
 
 ### Goals
+
 - G1 — Detect four violation classes (below) across TS/JS, PHP, Python, Rust.
 - G2 — Zero-config discovery: standard test dirs + glob fallback for any layout.
 - G3 — Expose the analysis as MCP tools *and* a standalone CLI (`nemesis`).
@@ -31,6 +32,7 @@ the analysis is purely syntactic and semantic-lite.
   suggestion engine.
 
 ### Non-Goals (v0.1)
+
 - Running or instrumenting tests.
 - Framework-specific runtime shims (e.g. intercepting Mockery at runtime).
 - Non-JS hosting: MCP server ships as a Node CLI (`npx nemesis-mcp`).
@@ -47,7 +49,9 @@ the analysis is purely syntactic and semantic-lite.
 | Rust | mockall, mockiato | `#[automock]` on traits, `mock! { }` blocks, double-vs-trait contract verification | tree-sitter-rust | traits, fns, structs, enums, impls |
 
 Fixture checking (tool 3) inspects JSON and YAML fixtures against production
-DTO/class/record shapes.
+DTO/class/record shapes. Field extraction covers TypeScript interfaces,
+type aliases/classes, PHP properties, Python class attributes, and Rust struct
+fields; unsupported or ambiguous matches are reported diagnostically.
 
 ## 4. Architecture
 
@@ -74,6 +78,7 @@ DTO/class/record shapes.
 ```
 
 ### 4.1 Production Indexer
+
 - Walks non-test source files (see §7 discovery rules).
 - One tree-sitter parser per language; per-grammar WASM loaded lazily and cached.
 - Builds a `SymbolGraph`: namespaces/classes/interfaces/traits/enums/functions,
@@ -81,12 +86,14 @@ DTO/class/record shapes.
   properties) and return types, plus structural edges (extends/implements/uses).
 
 ### 4.2 Double Extractor
+
 - Traverses test files, pattern-matching framework idioms per language via
   tree-sitter queries, producing `TestDouble` records with file/line anchors.
 - Every double records: `framework`, `targetSymbol`, `method`, `arity`,
   `returnTypeHint`, `returnExpr`, `confidence`.
 
 ### 4.3 Drift Analyzer
+
 - Resolves each double's `targetSymbol` through the `SymbolGraph` (follows
   extends/implements/uses chains up to a depth cap; unresolved → `UNRESOLVED`
   and skipped, not guessed).
@@ -106,9 +113,21 @@ DTO/class/record shapes.
    properties count as parameters; when the target's parameter list is unknown
    (e.g. `...$args` spread in test), no finding is emitted.
 3. **`RETURN_DRIFT`** — the stub's return value cannot satisfy the declared
-   return type of the real method.
+   return type of the real method. Both sides are reduced to a canonical
+   lattice first, so a `true` literal satisfies `boolean`, `bool` and `Bool`
+   alike; an array literal satisfies `T[]`, `Array<T>`, `list[T]`, `Vec<T>`
+   and PHP `iterable`; and a declared union, `Optional[T]`, `?T`, `Option<T>`
+   or `Promise<T>` is satisfied by any of its members. Confidence drops to
+   `warning` when both sides name concrete types, because the inheritance that
+   would relate them lives in a dependency directory that is never walked.
 4. **`VISIBILITY_BREACH`** — the double stubs a `private`/`protected` method
-   directly, bypassing the public interface.
+   directly, bypassing the public interface. Python has no access control, so
+   a single leading underscore yields `warning`; only a name-mangled
+   `__member` is `definite`.
+
+A stubbed member whose name is not a literal (`shouldReceive($method)` driven
+by a loop variable, an interpolated or templated name) identifies nothing that
+can be checked and produces no finding at all.
 
 **Severity:** `breaking_only` = `GHOST_METHOD`, `ARITY_MISMATCH`,
 `RETURN_DRIFT`, `VISIBILITY_BREACH` (all exit-1 in CLI mode; hard-fail in CI).
@@ -125,7 +144,9 @@ via CLI; no config file in v0.1.
 Stdio MCP server (`nemesis-mcp` binary, `nemesis-mcp --serve`). Three tools:
 
 ### `nemesis_audit`
+
 Scans the repo (or given paths) for double drift.
+
 - Params: `paths?: string[]` (files or dirs; default = discovery rules §7),
   `strictness?: "all" | "untyped_only" | "breaking_only"` (default `breaking_only`),
   `lang?: ("typescript"|"javascript"|"php"|"python"|"rust")[]` (default all four).
@@ -134,6 +155,7 @@ Scans the repo (or given paths) for double drift.
   message, suggestion? }] }` — violations sorted file → line → type.
 
 ### `nemesis_verify_symbol`
+
 - Params: `symbol: string` (e.g. `App\\Services\\InvoiceService`, `UserService`,
   or a short name resolved case-sensitively against the graph).
 - Response: every double pointing at that symbol plus validity flags
@@ -141,6 +163,7 @@ Scans the repo (or given paths) for double drift.
   signature when resolved.
 
 ### `nemesis_stale_fixtures`
+
 - Params: `paths?: string[]`, `strictness?` as above.
 - Response: violations list for JSON/YAML fixtures whose required schema fields
   no longer match current model/DTO structures (missing required fields with
@@ -154,31 +177,55 @@ Scans the repo (or given paths) for double drift.
   `**/tests.py`.
 - Production = all parsed source files that are not tests; languages detected
   by extension (`ts/tsx/js/jsx/mjs/cjs`, `php`, `py`, `rs`).
-- Respects `.gitignore`-style excludes (node_modules, vendor, dist, .git are
-  always excluded) and honors `--include`/`--exclude` overrides.
+- Excludes `node_modules`, `vendor`, `dist`, `build`, `out`, `target`, `.git`,
+  virtualenvs, and framework build/cache directories (`.next`, `.nuxt`,
+  `.svelte-kit`, `.turbo`, `.pytest_cache`, …) unconditionally, both as a
+  directory entry and as a path segment, so an excluded tree is pruned rather
+  than walked and discarded file by file.
+- Reads the scan root's `.gitignore` and applies it (comments, negation,
+  trailing-slash directory rules, `*`, `?`, `**` and character classes, last
+  match wins). Nested `.gitignore` files are not consulted. This keeps
+  generated trees and linked git worktrees out of the scan, which otherwise
+  report the same drift twice.
+- Honors `--exclude` overrides.
+
+### 7.1 Symbol resolution
+
+A target name is resolved against every declaration that shares its lookup key,
+narrowed in order by: the language family of the test that named it
+(TypeScript and JavaScript count as one), then the declaration closest to that
+test in the directory tree. An unbroken tie leaves the target unresolved and
+silent. For a dotted Python target the final segment must match a class name
+case-sensitively, so `patch('pkg.transport.urlopen')` cannot resolve the module
+`transport` to the class `Transport`.
 
 ## 8. Output & Exit Codes
 
 - CLI text output is human-readable grouped by violation type; `--json` emits
   the same object as `nemesis_audit`.
-- Exit codes: `0` = no violations, `1` = violations found (breaking severity),
-  `2` = operational error (bad path, parse infra failure).
+- Exit codes: `0` = complete clean scan, `1` = violations found,
+  `2` = operational error or partial scan (diagnostics are present).
 - The MCP server never exits non-zero for findings; it returns structured
   results for the agent to interpret.
 
 ## 9. Performance & Reliability
 
-- Streaming file walk with per-file parse budget; hard cap on per-file parse
-  failures (log to stderr, continue).
+- File walk with per-file byte, total-byte, duration, and file-count budgets;
+  hard caps on diagnostic volume. Budget exhaustion is reported as a partial
+  scan and never as clean.
 - Grammar WASM loaded lazily per language; if a grammar fails to load, that
-  language is skipped with a stderr notice and the summary reports skipped
-  languages — the tool never hard-fails because one grammar is unavailable.
+  language is skipped with a structured diagnostic and the summary reports the
+  partial scan. Explicitly requested roots/files that cannot be inspected are
+  operational errors, not clean results. Requested paths scope both production
+  and test inputs.
 - Deterministic output ordering for stable diffs.
 
 ## 10. Testing Strategy
 
 - Unit tests for the resolver and each extractor against fixture repos under
-  `test/fixtures/` covering all four ecosystems and all four violation types.
+  `fixtures/` covering all four ecosystems and all four violation types.
+- A fixture experiment matrix under `fixtures/experiments/` keeps three
+  repository-shaped variants per supported language and framework family.
 - End-to-end: run the CLI in JSON mode against fixtures; assert exit codes and
   violation payloads.
 - MCP smoke: start the server over stdio, list tools, call `nemesis_audit`,

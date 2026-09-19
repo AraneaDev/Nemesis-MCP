@@ -2,23 +2,61 @@
 // Symbol graph construction + resolution (extends / implements / uses chains).
 // ---------------------------------------------------------------------------
 
-import type {
-  MethodSymbol,
-  SymbolGraph,
-  TypeSymbol,
-} from './types.js';
+import type { LanguageId, MethodSymbol, SymbolGraph, TypeSymbol } from './types.js';
+import { languageForFile } from './discovery.js';
 
 export function emptyGraph(): SymbolGraph {
-  return { types: new Map(), functions: new Map(), skippedLanguages: [] };
+  return {
+    types: new Map(),
+    typeVariants: new Map(),
+    functions: new Map(),
+    skippedLanguages: [],
+  };
+}
+
+/**
+ * Languages that may legitimately share a symbol. A `.test.js` file exercising
+ * a class declared in a `.ts` file is ordinary; a TypeScript test resolving
+ * against a same-named Python class is not.
+ */
+function languageFamily(lang: LanguageId | null): string | null {
+  if (lang === null) return null;
+  if (lang === 'typescript' || lang === 'javascript') return 'js';
+  return lang;
+}
+
+/** Family of the file a symbol was declared in. */
+function familyOfSymbol(symbol: TypeSymbol): string | null {
+  return languageFamily(languageForFile(symbol.file));
 }
 
 /** Lookup key: fully qualified names are matched case-insensitively. */
+export function normalizeSymbolName(name: string): string {
+  return name
+    .replace(/^\\+|\\+$/g, '')
+    .replace(/::|->/g, '.')
+    .replace(/\\/g, '.')
+    .toLowerCase();
+}
+
 function key(name: string): string {
-  return name.replace(/^\\+/, '').replace(/\\+$/, '').toLowerCase();
+  return normalizeSymbolName(name).replace(/\./g, '\\');
 }
 
 export function addType(graph: SymbolGraph, symbol: TypeSymbol): void {
-  graph.types.set(key(symbol.name), symbol);
+  const k = key(symbol.name);
+  graph.types.set(k, symbol);
+  // Same-named types in different files (commonly a multi-language SDK repo
+  // shipping one class per language) used to overwrite each other silently,
+  // so a TypeScript test could be checked against a Python class.
+  const variants = graph.typeVariants.get(k);
+  if (variants) {
+    if (!variants.some((v) => v.file === symbol.file && v.name === symbol.name)) {
+      variants.push(symbol);
+    }
+  } else {
+    graph.typeVariants.set(k, [symbol]);
+  }
 }
 
 export function addFunction(graph: SymbolGraph, fn: MethodSymbol): void {
@@ -41,22 +79,93 @@ export interface Resolution {
   member: ResolvedMember | null;
 }
 
-/** Find a type by (qualified or short) name. */
-export function resolveType(graph: SymbolGraph, name: string): TypeSymbol | null {
-  if (!name) return null;
-  const direct = graph.types.get(key(name));
-  if (direct) return direct;
-  // short-name fallback: unique match among qualified names
-  const wanted = key(name).split(/\\|\.|:/).pop() ?? key(name);
-  let found: TypeSymbol | null = null;
-  for (const [k, t] of graph.types) {
-    const short = k.split(/\\|\.|:/).pop() ?? k;
-    if (short === wanted) {
-      if (found) return found; // ambiguous: return first deterministically
-      found = t;
-    }
+/** Number of leading path segments two files share. */
+function sharedPrefixDepth(a: string, b: string): number {
+  const x = a.split('/');
+  const y = b.split('/');
+  let n = 0;
+  while (n < x.length - 1 && n < y.length - 1 && x[n] === y[n]) n++;
+  return n;
+}
+
+/**
+ * Choose between same-named types. Candidates are first narrowed to the
+ * language family of the test that named them, then to the one declared
+ * closest to that test in the directory tree — which is what picks the right
+ * `CatalogService` in a monorepo holding several. A tie is left unresolved:
+ * callers report nothing rather than guess.
+ */
+export interface ResolveHint {
+  language?: LanguageId;
+  /** Test file that named the target, used as a proximity tie-break. */
+  fromFile?: string;
+}
+
+function pickCandidate(candidates: TypeSymbol[], hint?: ResolveHint): TypeSymbol | null {
+  if (candidates.length === 0) return null;
+  if (candidates.length === 1) return candidates[0] ?? null;
+
+  let pool = candidates;
+  const family = languageFamily(hint?.language ?? null);
+  if (family !== null) {
+    const sameFamily = pool.filter((c) => familyOfSymbol(c) === family);
+    // Never fall back across languages: a TypeScript test must not resolve
+    // against a same-named Python class.
+    if (sameFamily.length === 0) return null;
+    pool = sameFamily;
   }
-  return found;
+  if (pool.length === 1) return pool[0] ?? null;
+
+  const from = hint?.fromFile;
+  if (from) {
+    let best: TypeSymbol | null = null;
+    let bestDepth = -1;
+    let tied = false;
+    for (const c of pool) {
+      const depth = sharedPrefixDepth(from, c.file);
+      if (depth > bestDepth) {
+        bestDepth = depth;
+        best = c;
+        tied = false;
+      } else if (depth === bestDepth) {
+        tied = true;
+      }
+    }
+    if (best && !tied) return best;
+  }
+  return null; // still ambiguous — must be qualified
+}
+
+/** Find a type by (qualified or short) name, narrowed by `hint`. */
+export function resolveType(
+  graph: SymbolGraph,
+  name: string,
+  hint?: ResolveHint,
+): TypeSymbol | null {
+  if (!name) return null;
+  const k = key(name);
+  const direct = graph.typeVariants.get(k);
+  if (direct && direct.length > 0) return pickCandidate(direct, hint);
+
+  // short-name fallback: unique match among qualified names
+  const wanted = normalizeSymbolName(name).split('.').pop() ?? normalizeSymbolName(name);
+  const candidates: TypeSymbol[] = [];
+  for (const [candidateKey, variants] of graph.typeVariants) {
+    const short = normalizeSymbolName(candidateKey).split('.').pop() ?? candidateKey;
+    if (short === wanted) candidates.push(...variants);
+  }
+
+  // `patch('usage_tracker.transport.urlopen')` names a module attribute, not a
+  // method: the target `usage_tracker.transport` must not match the class
+  // `Transport`. Python modules are snake_case and classes CapWords, so for a
+  // dotted Python target the final segment has to match case-sensitively.
+  if (hint?.language === 'python' && name.includes('.')) {
+    const tail = name.split('.').pop() ?? name;
+    const exact = candidates.filter((c) => (c.name.split(/[.\\]/).pop() ?? c.name) === tail);
+    return pickCandidate(exact, hint);
+  }
+
+  return pickCandidate(candidates, hint);
 }
 
 /** Look up a method on a type, walking extends/implements/uses ancestors. */
@@ -65,9 +174,17 @@ export function resolveMember(
   type: TypeSymbol,
   method: string,
   depth = 0,
+  hint?: ResolveHint,
 ): ResolvedMember | null {
   if (depth > MAX_DEPTH) return null;
-  const local = type.methods.get(method);
+  const lookupName = type.file.toLowerCase().endsWith('.php') ? method.toLowerCase() : method;
+  const local =
+    type.methods.get(lookupName) ??
+    (type.file.toLowerCase().endsWith('.php')
+      ? [...type.methods.entries()].find(
+          ([name]) => name.toLowerCase() === method.toLowerCase(),
+        )?.[1]
+      : undefined);
   if (local) {
     return {
       owner: type,
@@ -76,10 +193,15 @@ export function resolveMember(
     };
   }
   const ancestors = [...type.extends, ...type.implements, ...type.uses];
+  const ownLanguage = hint?.language ?? languageForFile(type.file);
+  const ownHint: ResolveHint = {
+    ...(ownLanguage ? { language: ownLanguage } : {}),
+    fromFile: hint?.fromFile ?? type.file,
+  };
   for (const ancName of ancestors) {
-    const anc = resolveType(graph, ancName);
+    const anc = resolveType(graph, ancName, ownHint);
     if (!anc || anc === type) continue;
-    const hit = resolveMember(graph, anc, method, depth + 1);
+    const hit = resolveMember(graph, anc, method, depth + 1, ownHint);
     if (hit) return hit;
   }
   return null;
@@ -92,17 +214,22 @@ export function resolveMember(
 export function resolveTarget(
   graph: SymbolGraph,
   target: string,
+  hint?: ResolveHint,
 ): { type: TypeSymbol; method: string | null; member: ResolvedMember | null } | null {
   const normalized = target.replace(/^\\+/, '');
   const parts = normalized.split(/::|\.|->/);
   if (parts.length >= 2) {
     const typeName = parts.slice(0, -1).join('\\');
     const method = parts[parts.length - 1] ?? null;
-    const type = resolveType(graph, typeName);
+    const type = resolveType(graph, typeName, hint);
     if (!type) return null;
-    return { type, method: method && method.length > 0 ? method : null, member: method ? resolveMember(graph, type, method) : null };
+    return {
+      type,
+      method: method && method.length > 0 ? method : null,
+      member: method ? resolveMember(graph, type, method, 0, hint) : null,
+    };
   }
-  const type = resolveType(graph, normalized);
+  const type = resolveType(graph, normalized, hint);
   if (!type) return null;
   return { type, method: null, member: null };
 }
@@ -120,11 +247,7 @@ export function similarity(a: string, b: string): number {
     cur[0] = i;
     for (let j = 1; j <= n; j++) {
       const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      cur[j] = Math.min(
-        (prev[j] ?? 0) + 1,
-        (cur[j - 1] ?? 0) + 1,
-        (prev[j - 1] ?? 0) + cost,
-      );
+      cur[j] = Math.min((prev[j] ?? 0) + 1, (cur[j - 1] ?? 0) + 1, (prev[j - 1] ?? 0) + cost);
     }
     for (let j = 0; j <= n; j++) prev[j] = cur[j] ?? 0;
   }
@@ -132,10 +255,7 @@ export function similarity(a: string, b: string): number {
 }
 
 /** Rank candidate member names by similarity to `name`; best first. */
-export function suggestMember(
-  type: TypeSymbol,
-  name: string,
-): string | null {
+export function suggestMember(type: TypeSymbol, name: string): string | null {
   let best: { name: string; d: number } | null = null;
   for (const candidate of type.methods.keys()) {
     const d = similarity(name, candidate);

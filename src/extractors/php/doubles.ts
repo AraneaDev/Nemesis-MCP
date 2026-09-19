@@ -122,12 +122,7 @@ export async function extractPhpDoubles(
   source: string,
 ): Promise<TestDouble[]> {
   const doubles: TestDouble[] = [];
-  let parsed;
-  try {
-    parsed = await parseSource('php', source);
-  } catch {
-    return doubles;
-  }
+  const parsed = await parseSource('php', source);
   const { root } = parsed;
 
   /** variable name → factory hit (from `$x = createMock(Foo::class)`). */

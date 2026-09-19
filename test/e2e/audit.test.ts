@@ -48,10 +48,74 @@ describe('nemesis audit end-to-end', () => {
   );
 
   it(
+    'returns an operational error for a missing scan path',
+    () => {
+      const { status } = runCli(['audit', 'fixtures/does-not-exist'], root);
+      expect(status).toBe(2);
+    },
+    120_000,
+  );
+
+  it(
     'exit code 0 on clean repo',
     () => {
       const { status } = runCli(['audit', 'fixtures/rust'], root);
       expect(status).toBe(0);
+    },
+    120_000,
+  );
+
+  it(
+    'dogfoods a repository-shaped TypeScript project',
+    () => {
+      const { stdout, status } = runCli(
+        ['audit', 'fixtures/dogfood-repo', '--strictness=all', '--json'],
+        root,
+      );
+      expect(status).toBe(1);
+      const result = JSON.parse(stdout);
+      expect(result.summary.scanned_test_files).toBe(1);
+      expect(result.summary.doubles_inspected).toBe(3);
+      expect(new Set(result.violations.map((v: { type: string }) => v.type))).toEqual(
+        new Set(['GHOST_METHOD', 'ARITY_MISMATCH', 'RETURN_DRIFT']),
+      );
+    },
+    120_000,
+  );
+
+  it(
+    'runs the multi-experiment matrix for every supported language',
+    () => {
+      const { stdout, status } = runCli(
+        ['audit', 'fixtures/experiments', '--strictness=all', '--json'],
+        root,
+      );
+      expect(status).toBe(1);
+      const result = JSON.parse(stdout);
+      expect(result.summary.scanned_test_files).toBeGreaterThanOrEqual(15);
+      expect(result.summary.doubles_inspected).toBeGreaterThanOrEqual(15);
+
+      expect(result.summary.scanned_test_files).toBe(15);
+      expect(result.summary.doubles_inspected).toBe(21);
+      const files = result.violations.map((v: { file: string }) => v.file);
+      for (const languageDir of ['typescript', 'javascript', 'php', 'python']) {
+        expect(files.some((file: string) => file.includes(`experiments/${languageDir}/`))).toBe(true);
+      }
+    },
+    120_000,
+  );
+
+  it(
+    'keeps a clean repository-shaped project clean',
+    () => {
+      const { stdout, status } = runCli(
+        ['audit', 'fixtures/dogfood-clean', '--json'],
+        root,
+      );
+      expect(status).toBe(0);
+      const result = JSON.parse(stdout);
+      expect(result.summary.scanned_test_files).toBe(1);
+      expect(result.violations).toEqual([]);
     },
     120_000,
   );

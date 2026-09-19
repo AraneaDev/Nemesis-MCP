@@ -3,6 +3,7 @@
 // ---------------------------------------------------------------------------
 
 import type {
+  FieldSymbol,
   MethodSymbol,
   ParamSymbol,
   SymbolGraph,
@@ -52,6 +53,21 @@ function fnFromNode(node: SyntaxNode): MethodSymbol | null {
   };
 }
 
+function fieldsOfClassBody(body: SyntaxNode | null): Map<string, FieldSymbol> | null {
+  if (!body) return null;
+  const fields = new Map<string, FieldSymbol>();
+  for (const child of body.namedChildren) {
+    const text = child.text.trim();
+    const match = /^([A-Za-z_][A-Za-z0-9_]*)\s*(?::\s*([^=]+))?\s*(?:=\s*.+)?$/.exec(text);
+    if (!match || /^(def|async|return|if|for|while|with|raise|pass)(?:\s|$)/.test(text)) continue;
+    const name = match[1];
+    const type = match[2]?.trim() ?? null;
+    if (!name || (!type && !text.includes('='))) continue;
+    fields.set(name, { name, type, required: !text.includes('=') });
+  }
+  return fields.size > 0 ? fields : null;
+}
+
 /** Python visibility: leading underscores. */
 export function pyVisibility(name: string): 'public' | 'protected' | 'private' {
   if (name.startsWith('__') && !name.endsWith('__')) return 'private';
@@ -64,12 +80,7 @@ export async function indexPythonFile(
   source: string,
   graph: SymbolGraph,
 ): Promise<void> {
-  let parsed;
-  try {
-    parsed = await parseSource('python', source);
-  } catch {
-    return;
-  }
+  const parsed = await parseSource('python', source);
   const { root } = parsed;
 
   for (const { node } of walk(root)) {
@@ -82,6 +93,7 @@ export async function indexPythonFile(
         kind: 'class',
         methods: new Map(),
         unknownMembers: new Set(['__getattr__']),
+        ...(fieldsOfClassBody(field(node, 'body')) ? { fields: fieldsOfClassBody(field(node, 'body'))! } : {}),
         extends: [],
         implements: [],
         uses: [],

@@ -2,10 +2,10 @@
 // nemesis_stale_fixtures: check JSON/YAML fixtures against production DTO shapes.
 // ---------------------------------------------------------------------------
 
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
-import type { Finding, SymbolGraph } from '../core/types.js';
+import type { Finding, ScanDiagnostic, Strictness, SymbolGraph } from '../core/types.js';
 import { emptyGraph, resolveType } from '../core/symbolGraph.js';
 import { discoverFiles } from '../core/discovery.js';
 import { indexTsFile } from '../extractors/ts/index.js';
@@ -13,6 +13,7 @@ import { indexPhpFile } from '../extractors/php/index.js';
 import { indexPythonFile } from '../extractors/python/index.js';
 import { indexRustFile } from '../extractors/rust/index.js';
 import { similarity } from '../core/symbolGraph.js';
+import { passesStrictness } from '../core/policy.js';
 
 const FIXTURE_EXTS = new Set(['.json', '.yaml', '.yml']);
 
@@ -27,7 +28,7 @@ function languageOf(rel: string): 'typescript' | 'javascript' | 'php' | 'python'
 }
 
 /** Production graph restricted to type symbols carrying field maps. */
-async function buildGraph(rootDir: string, files: string[]): Promise<SymbolGraph> {
+async function buildGraph(rootDir: string, files: string[], diagnostics: ScanDiagnostic[]): Promise<SymbolGraph> {
   const graph = emptyGraph();
   for (const rel of files) {
     const lang = languageOf(rel);
@@ -43,8 +44,8 @@ async function buildGraph(rootDir: string, files: string[]): Promise<SymbolGraph
       } else if (lang === 'rust') {
         await indexRustFile(rel, source, graph);
       }
-    } catch {
-      // skip unreadable/unparseable files
+    } catch (error) {
+      diagnostics.push({ file: rel, stage: 'index', message: error instanceof Error ? error.message : String(error), fatal: false });
     }
   }
   return graph;
@@ -56,7 +57,7 @@ interface DtoLike {
   file: string;
 }
 
-/** Collect DTO-likes: TS type aliases / interfaces with object-typed fields. */
+/** Collect DTO-like symbols from every indexer that exposes field metadata. */
 function collectDtoLikes(graph: SymbolGraph): DtoLike[] {
   const out: DtoLike[] = [];
   for (const t of graph.types.values()) {
@@ -64,9 +65,6 @@ function collectDtoLikes(graph: SymbolGraph): DtoLike[] {
       out.push({ name: t.name, fields: t.fields, file: t.file });
       continue;
     }
-    // Class/interface members without fields: map public properties if we
-    // extracted them as methods? Not currently; rely on type_alias/interface
-    // field maps (TS) only for v0.1.
   }
   return out;
 }
@@ -79,45 +77,74 @@ function matchDto(
 ): DtoLike | null {
   const signals = [fixtureName, ...topKeys].map((s) => s.toLowerCase());
   let best: { dto: DtoLike; score: number } | null = null;
+  let tied = false;
   for (const dto of dtos) {
     const short = (dto.name.split('\\').pop() ?? dto.name).toLowerCase();
     for (const s of signals) {
-      const score = s.includes(short) || short.includes(s.replace(/fixture|s\b/g, '')) ? 1 : 0;
-      if (score > 0 && (!best || score > best.score)) best = { dto, score };
+      const normalized = s.replace(/fixture|s\b/g, '');
+      const baseShort = short.replace(/record|dto|model$/, '');
+      const overlap = topKeys.filter((key) => dto.fields.has(key)).length;
+      const score = s === short || normalized === baseShort
+        ? 3 + overlap
+        : s.includes(short) || short.includes(normalized)
+          ? 1 + overlap
+          : overlap > 0
+            ? overlap
+            : 0;
+      if (score === 0) continue;
+      if (!best || score > best.score) {
+        best = { dto, score };
+        tied = false;
+      } else if (score === best.score && best.dto !== dto) {
+        tied = true;
+      }
     }
   }
-  return best?.dto ?? null;
-}
-
-function pluralizeStrip(s: string): string {
-  return s.replace(/e?s$/, '');
+  return best && !tied ? best.dto : null;
 }
 
 export interface FixtureCheckResult {
   violations: Finding[];
   scanned: number;
+  diagnostics: ScanDiagnostic[];
+}
+
+export function filterFixtureFindings(findings: Finding[], strictness: Strictness): Finding[] {
+  return findings.filter((finding) => passesStrictness(strictness, finding));
 }
 
 export async function checkFixtures(
   rootDir: string,
   paths?: string[],
 ): Promise<FixtureCheckResult> {
-  const { productionFiles } = await discoverFiles(rootDir);
-  const graph = await buildGraph(rootDir, productionFiles);
+  const diagnostics: ScanDiagnostic[] = [];
+  const { productionFiles } = await discoverFiles(rootDir, { diagnostics });
+  const graph = await buildGraph(rootDir, productionFiles, diagnostics);
   const dtos = collectDtoLikes(graph);
 
   const violations: Finding[] = [];
   let scanned = 0;
 
   const fixtureFiles: string[] = [];
-  await collectFixtureFiles(rootDir, '', fixtureFiles, paths ?? []);
+  for (const requested of paths ?? []) {
+    try {
+      const info = await stat(path.join(rootDir, requested));
+      if (!info.isDirectory() && !FIXTURE_EXTS.has(path.extname(requested))) {
+        diagnostics.push({ file: requested, stage: 'discovery', message: 'Requested fixture path is not a JSON/YAML file or directory', fatal: true });
+      }
+    } catch (error) {
+      throw new Error(`Requested fixture path '${requested}' does not exist: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  await collectFixtureFiles(rootDir, '', fixtureFiles, paths ?? [], diagnostics);
 
   for (const rel of fixtureFiles) {
     const abs = path.join(rootDir, rel);
     let raw: string;
     try {
       raw = await readFile(abs, 'utf8');
-    } catch {
+    } catch (error) {
+      diagnostics.push({ file: rel, stage: 'read', message: error instanceof Error ? error.message : String(error), fatal: true });
       continue;
     }
     let data: unknown;
@@ -125,13 +152,17 @@ export async function checkFixtures(
       data = FIXTURE_EXTS.has(path.extname(rel)) && /\.ya?ml$/.test(rel)
         ? parseYaml(raw)
         : JSON.parse(raw);
-    } catch {
+    } catch (error) {
+      diagnostics.push({ file: rel, stage: 'parse', message: error instanceof Error ? error.message : String(error), fatal: true });
       continue;
     }
     scanned++;
     const topKeys = topKeyNames(data);
     const dto = matchDto(path.basename(rel, path.extname(rel)), topKeys, dtos);
-    if (!dto) continue;
+    if (!dto) {
+      diagnostics.push({ file: rel, stage: 'fixture', message: 'No unambiguous supported DTO shape matched this fixture', fatal: false });
+      continue;
+    }
 
     const records = recordsOf(data, dto);
     for (const rec of records) {
@@ -158,6 +189,7 @@ export async function checkFixtures(
             line: 1,
             type: 'RETURN_DRIFT',
             confidence: 'warning',
+            evidence: 'untyped',
             double_type: 'stale_fixture',
             target: `${dto.name}.${key}`,
             message: `Fixture '${path.basename(rel)}' has field '${key}' which no longer exists on ${dto.name}.${suggestion ? ` Did you mean '${suggestion}'?` : ''}`,
@@ -168,7 +200,7 @@ export async function checkFixtures(
     }
   }
 
-  return { violations, scanned };
+  return { violations, scanned, diagnostics };
 }
 
 async function collectFixtureFiles(
@@ -176,19 +208,21 @@ async function collectFixtureFiles(
   rel: string,
   out: string[],
   paths: string[],
+  diagnostics: ScanDiagnostic[],
 ): Promise<void> {
   const dir = path.join(rootDir, rel);
   let entries;
   try {
     entries = await readdir(dir, { withFileTypes: true });
-  } catch {
+  } catch (error) {
+    diagnostics.push({ file: rel || '.', stage: 'discovery', message: error instanceof Error ? error.message : String(error), fatal: true });
     return;
   }
   for (const entry of entries) {
     const relEntry = rel ? `${rel}/${entry.name}` : entry.name;
     if (entry.isDirectory()) {
       if (['node_modules', 'vendor', 'dist', '.git'].includes(entry.name)) continue;
-      await collectFixtureFiles(rootDir, relEntry, out, paths);
+      await collectFixtureFiles(rootDir, relEntry, out, paths, diagnostics);
     } else if (
       FIXTURE_EXTS.has(path.extname(entry.name)) &&
       (paths.length === 0 || paths.some((p) => relEntry === p || relEntry.startsWith(p + '/')))

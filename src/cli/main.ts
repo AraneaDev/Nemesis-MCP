@@ -6,8 +6,8 @@
 import path from 'node:path';
 import process from 'node:process';
 import { runAudit, verifySymbol } from '../core/runtime.js';
-import { checkFixtures } from '../fixtures/staleFixtures.js';
-import { renderJson, renderText } from '../core/report.js';
+import { checkFixtures, filterFixtureFindings } from '../fixtures/staleFixtures.js';
+import { exitCodeFor, renderJson, renderText } from '../core/report.js';
 import type { LanguageId, Strictness } from '../core/types.js';
 
 interface CliArgs {
@@ -97,11 +97,12 @@ async function main(): Promise<number> {
   const rootDir = process.cwd();
   const runtimeOpts = {
     rootDir,
-    ...(args.positional.length ? { paths: args.positional } : {}),
+    ...((args.positional.length || args.includes.length)
+      ? { paths: [...args.positional, ...args.includes] }
+      : {}),
     strictness: toStrictness(args.strictness as string),
     languages: args.languages,
     extraExcludes: args.excludes,
-    testRoots: args.includes,
   };
 
   try {
@@ -112,7 +113,7 @@ async function main(): Promise<number> {
       } else {
         console.log(renderText(result));
       }
-      return result.violations.length > 0 ? 1 : 0;
+      return exitCodeFor(result, args.strictness);
     }
 
     if (args.command === 'verify-symbol') {
@@ -136,7 +137,7 @@ async function main(): Promise<number> {
       } else {
         if (!report.resolved) {
           console.log(`Symbol '${report.symbol}' could not be resolved in the production code.`);
-          return 0;
+          return report.diagnostics?.length ? 2 : 0;
         }
         console.log(`Symbol: ${report.symbol}`);
         if (report.signature) console.log(`  ${report.signature}`);
@@ -151,24 +152,29 @@ async function main(): Promise<number> {
           }
         }
       }
-      return 0;
+      return report.diagnostics?.length ? 2 : 0;
     }
 
     if (args.command === 'fixtures') {
       const result = await checkFixtures(rootDir, args.positional);
+      const violations = filterFixtureFindings(result.violations, args.strictness);
       const resultJson = {
-        summary: { scanned_fixtures: result.scanned, violations_count: result.violations.length },
-        violations: result.violations,
+        summary: {
+          scanned_fixtures: result.scanned,
+          violations_count: violations.length,
+          ...(result.diagnostics.length ? { diagnostics: result.diagnostics, partial: true } : {}),
+        },
+        violations,
       };
       console.log(args.json ? JSON.stringify(resultJson, null, 2) : renderText({
         summary: {
           scanned_test_files: result.scanned,
           doubles_inspected: 0,
-          violations_count: result.violations.length,
+          violations_count: violations.length,
         },
-        violations: result.violations,
+        violations,
       }));
-      return result.violations.length > 0 ? 1 : 0;
+      return result.diagnostics.length > 0 ? 2 : violations.length > 0 ? 1 : 0;
     }
 
     console.error(`Unknown command: ${args.command}`);

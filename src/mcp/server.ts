@@ -6,7 +6,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { runAudit, verifySymbol } from '../core/runtime.js';
-import { checkFixtures } from '../fixtures/staleFixtures.js';
+import { checkFixtures, filterFixtureFindings } from '../fixtures/staleFixtures.js';
 import type { LanguageId, Strictness } from '../core/types.js';
 
 const LANGS = ['typescript', 'javascript', 'php', 'python', 'rust'] as const;
@@ -81,11 +81,13 @@ export function createServer(): McpServer {
     },
     async ({ paths, strictness }) => {
       const result = await checkFixtures(process.cwd(), paths && paths.length ? paths : undefined);
-      const filtered = strictness === 'breaking_only'
-        ? result.violations.filter((v) => v.confidence === 'definite')
-        : result.violations;
+      const filtered = filterFixtureFindings(result.violations, strictness ?? 'breaking_only');
       const payload = {
-        summary: { scanned_fixtures: result.scanned, violations_count: filtered.length },
+        summary: {
+          scanned_fixtures: result.scanned,
+          violations_count: filtered.length,
+          ...(result.diagnostics.length ? { diagnostics: result.diagnostics, partial: true } : {}),
+        },
         violations: filtered,
       };
       return { content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }] };
