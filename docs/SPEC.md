@@ -128,6 +128,19 @@ is listed in `unparsable_fixtures`. Neither makes the scan partial.
    properties count as parameters; when the target's parameter list is unknown
    (e.g. `...$args` spread in test), no finding is emitted.
 
+   A stub can also assert something about the *shape* of the call rather than
+   the value, and those assertions drift too:
+   - `mockResolvedValue` hands back a promise. On a method that stopped being
+     async, the caller now receives one where it expects a value, and the
+     types still line up because the lattice unwraps promises. Reported when
+     the declared return type is not awaitable.
+   - `willReturnSelf()` asserts the method is fluent. Reported when the
+     declared return type is not `self`, `static`, `$this` or the class itself.
+   - An `Enum::Case` or `Enum.Case` in a return value whose case the enum no
+     longer has. A renamed case still parses and still type-checks against the
+     enum, so nothing else here would notice. Enum members are indexed for
+     both PHP and TypeScript.
+
    The arguments themselves are compared too, where both sides are knowable:
    a literal passed to `with(...)` or `toHaveBeenCalledWith(...)` is checked
    against the declared parameter type through the same lattice used for

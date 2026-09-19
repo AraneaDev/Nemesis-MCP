@@ -15,6 +15,8 @@ interface ChainInfo {
   withArity: number | null;
   /** Source text of the `with(...)` arguments, for type comparison. */
   withArgs: string[];
+  /** `willReturnSelf()` was used, which asserts the method returns `$this`. */
+  returnsSelf: boolean;
   /**
    * Every configured return value. `willReturnOnConsecutiveCalls(a, b, c)` and
    * Mockery's `andReturn(a, b)` queue one value per call, and each has to
@@ -25,7 +27,13 @@ interface ChainInfo {
 
 /** Collect method/with/return info walking the fluent chain via `object` fields. */
 function chainInfo(root: SyntaxNode): ChainInfo {
-  const info: ChainInfo = { methods: [], withArity: null, withArgs: [], returnExprs: [] };
+  const info: ChainInfo = {
+    methods: [],
+    withArity: null,
+    withArgs: [],
+    returnsSelf: false,
+    returnExprs: [],
+  };
   let cur: SyntaxNode | null = root;
   while (cur) {
     if (cur.type === 'member_call_expression' || cur.type === 'method_call_expression') {
@@ -49,10 +57,12 @@ function chainInfo(root: SyntaxNode): ChainInfo {
         name === 'willReturnMap' ||
         name === 'willReturnCallback' ||
         name === 'willReturnSelf' ||
+        name === 'andReturnSelf' ||
         name === 'andReturn' ||
         name === 'andSet' ||
         name === 'andReturnUsing'
       ) {
+        if (name === 'willReturnSelf' || name === 'andReturnSelf') info.returnsSelf = true;
         const values =
           name === 'willReturnOnConsecutiveCalls' || name === 'andReturn'
             ? (args?.namedChildren ?? []).map((a) => a.text)
@@ -226,6 +236,7 @@ export async function extractPhpDoubles(relFile: string, source: string): Promis
         assertedArity: null,
         returnTypeHint: null,
         returnExpr,
+        ...(index === 0 && info.returnsSelf ? { returnsSelf: true } : {}),
         confidence: 'definite',
       });
     }

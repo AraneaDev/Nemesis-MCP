@@ -103,6 +103,10 @@ export interface TestDouble {
   returnTypeHint: string | null;
   /** Source text of the return expression, if any. */
   returnExpr: string | null;
+  /** The stub supplies a resolved value, so it believes the method is async. */
+  resolvedReturn?: boolean;
+  /** The stub is configured to return the mock itself (`willReturnSelf`). */
+  returnsSelf?: boolean;
   confidence: Confidence;
 }
 

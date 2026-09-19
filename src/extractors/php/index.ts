@@ -97,6 +97,10 @@ function methodFromNode(node: SyntaxNode): MethodSymbol | null {
 function modifiersOf(node: SyntaxNode): string[] {
   const found: string[] = [];
   for (const child of node.children) {
+    // Modifiers precede the `function` keyword. Reading past it picked up the
+    // return type, so `public function me(): static` looked like a static
+    // method and every fluent stub of it was reported as un-interceptable.
+    if (child.text.trim() === 'function') break;
     const text = child.text.trim();
     if (/^(final|static|abstract|readonly)$/.test(text)) found.push(text);
   }
@@ -219,6 +223,9 @@ export async function indexPhpFile(
         file: relFile,
         kind: 'enum',
         methods: methodsOfBody(node),
+        // Cases are the enum's contract. A renamed case still parses and still
+        // type-checks against the enum, so nothing else here would notice.
+        fields: enumCases(node),
         unknownMembers: new Set(),
         extends: [],
         implements: heritageNames(node, ['interface_list'], header),
@@ -231,4 +238,21 @@ export async function indexPhpFile(
       if (fn) addFunction(graph, fn);
     }
   }
+}
+
+/** `case Active = 'active';` entries of an enum declaration. */
+function enumCases(node: SyntaxNode): Map<string, FieldSymbol> {
+  const cases = new Map<string, FieldSymbol>();
+  for (const { node: child } of walk(node)) {
+    if (child.type !== 'enum_case') continue;
+    const name = field(child, 'name')?.text ?? child.namedChildren[0]?.text;
+    if (name) {
+      cases.set(name, {
+        name,
+        type: null,
+        required: true,
+      });
+    }
+  }
+  return cases;
 }

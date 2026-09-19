@@ -18,6 +18,7 @@ interface SpyRecord {
   returnExpr: string | null;
   assertedArity: number | null;
   assertedArgs?: string[];
+  resolvedReturn?: boolean;
 }
 
 function memberCall(
@@ -208,6 +209,7 @@ export async function extractTsDoubles(
       rec.returnExpr = expr;
       if (call.property.startsWith('mockResolvedValue')) {
         rec.returnTypeHint = dt; // Promise<T> handled by the analyzer
+        rec.resolvedReturn = true;
       } else {
         rec.returnTypeHint = dt ?? literalType(expr);
       }
@@ -236,6 +238,7 @@ export async function extractTsDoubles(
       assertedArity: rec.assertedArity,
       returnTypeHint: rec.returnTypeHint,
       returnExpr: rec.returnExpr,
+      ...(rec.resolvedReturn ? { resolvedReturn: true } : {}),
       confidence: rec.target ? 'definite' : 'warning',
     });
   }

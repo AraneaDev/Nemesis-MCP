@@ -146,6 +146,8 @@ export async function indexTsFile(
 
     const classFields = d.kind === 'class' ? fieldsFromClassBody(field(d.node, 'body')) : null;
     if (classFields) typeSym.fields = classFields;
+    // Enum members are the enum's contract; a renamed one still type-checks.
+    if (d.kind === 'enum') typeSym.fields = enumMembers(d.node);
 
     // Heritage clauses.
     for (const { node: n } of walk(d.node)) {
@@ -292,4 +294,26 @@ function methodFromFunction(node: import('web-tree-sitter').Node): MethodSymbol 
     visibility: 'public',
     line: node.startPosition.row + 1,
   };
+}
+
+/** Member names of an enum declaration, assigned or bare. */
+function enumMembers(node: import('web-tree-sitter').Node): Map<string, FieldSymbol> {
+  const members = new Map<string, FieldSymbol>();
+  const body = field(node, 'body');
+  for (const child of body?.namedChildren ?? []) {
+    const name =
+      child.type === 'enum_assignment'
+        ? (field(child, 'name')?.text ?? child.namedChildren[0]?.text)
+        : child.type === 'property_identifier'
+          ? child.text
+          : null;
+    if (name) {
+      members.set(name, {
+        name,
+        type: null,
+        required: true,
+      });
+    }
+  }
+  return members;
 }

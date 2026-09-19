@@ -252,6 +252,11 @@ function classify(
       findings.push(finding);
     }
 
+    // --- ASYNC AND FLUENT CONTRACTS -----------------------------------------
+    for (const finding of shapeOfReturnFindings(d, m, owner, real, graph, lines)) {
+      findings.push(finding);
+    }
+
     // --- RETURN_DRIFT -------------------------------------------------------
     if (d.returnTypeHint || d.returnExpr !== null) {
       const declared = real.returnType;
@@ -752,4 +757,121 @@ function argumentTypeFindings(
     });
   }
   return findings;
+}
+
+/** Declared types that are awaited rather than used directly. */
+const AWAITABLE = /^(Promise|PromiseLike|Awaitable|Task|Future|Coroutine|Deferred)\s*[<[]/;
+
+/**
+ * Contracts the stub asserts about the shape of the call rather than about the
+ * value: that the method is awaitable, that it is fluent, and that any enum
+ * member it names still exists.
+ */
+function shapeOfReturnFindings(
+  d: TestDouble,
+  m: { name: string; line: number },
+  owner: TypeSymbol,
+  real: MethodSymbol,
+  graph: SymbolGraph,
+  lines: string[],
+): Finding[] {
+  if (suppressed(lines, m.line)) return [];
+  const findings: Finding[] = [];
+  const declared = real.returnType?.trim() ?? '';
+  const target = `${owner.name}::${m.name}`;
+
+  // `mockResolvedValue` hands back a promise. On a method that stopped being
+  // async the caller now receives a promise where it expects a value, and the
+  // types still line up because the lattice unwraps the promise.
+  if (d.resolvedReturn && declared && !isUntypedSide(declared)) {
+    if (!AWAITABLE.test(declared) && !/^(any|unknown|mixed)$/i.test(declared)) {
+      findings.push({
+        file: d.file,
+        line: m.line,
+        type: 'RETURN_DRIFT',
+        confidence: 'definite',
+        evidence: 'typed',
+        double_type: d.framework,
+        target,
+        message: `Stub resolves a value but ${target} returns '${declared}', which is not awaitable.`,
+      });
+    }
+  }
+
+  // `willReturnSelf()` asserts the method is fluent.
+  if (d.returnsSelf && declared && !isUntypedSide(declared)) {
+    const short = declared.replace(/^\\+/, '').split('\\').pop() ?? declared;
+    const ownerShort = owner.name.replace(/^\\+/, '').split('\\').pop() ?? owner.name;
+    const fluent =
+      /^(self|static|\$this|this)$/i.test(short) ||
+      short.toLowerCase() === ownerShort.toLowerCase();
+    if (!fluent) {
+      findings.push({
+        file: d.file,
+        line: m.line,
+        type: 'RETURN_DRIFT',
+        confidence: 'definite',
+        evidence: 'typed',
+        double_type: d.framework,
+        target,
+        message: `Stub returns the double itself but ${target} returns '${declared}', so the method is not fluent.`,
+      });
+    }
+  }
+
+  // An enum member named in the return value that the enum no longer has.
+  const missing = missingEnumMember(d.returnExpr, graph, d);
+  if (missing) {
+    findings.push({
+      file: d.file,
+      line: m.line,
+      type: 'RETURN_DRIFT',
+      confidence: 'definite',
+      evidence: 'typed',
+      double_type: d.framework,
+      target,
+      message: `Stub returns '${missing.written}' but '${missing.enumName}' has no member '${missing.member}'.${missing.suggestion ? ` Did you mean '${missing.suggestion}'?` : ''}`,
+      ...(missing.suggestion ? { suggestion: missing.suggestion } : {}),
+    });
+  }
+
+  return findings;
+}
+
+const ENUM_MEMBER = /^([A-Za-z_$][\w$]*)\s*(?:::|\.)\s*([A-Za-z_$][\w$]*)$/;
+
+/**
+ * An `Enum::Case` or `Enum.Case` in a return value whose case is gone. A
+ * renamed case still parses and still type-checks against the enum, so this is
+ * drift that survives every other check here.
+ */
+function missingEnumMember(
+  expr: string | null,
+  graph: SymbolGraph,
+  d: TestDouble,
+): { written: string; enumName: string; member: string; suggestion: string | null } | null {
+  if (!expr) return null;
+  const match = ENUM_MEMBER.exec(expr.trim());
+  if (!match?.[1] || !match[2]) return null;
+  const [written, holder, member] = [expr.trim(), match[1], match[2]];
+
+  const type = resolveType(graph, holder, {
+    language: d.language,
+    fromFile: d.file,
+  });
+  if (!type || type.kind !== 'enum') return null;
+  // Cases are recorded as members; an enum we failed to read has none.
+  const known = new Set<string>([...type.methods.keys(), ...(type.fields?.keys() ?? [])]);
+  if (known.size === 0 || known.has(member)) return null;
+
+  let suggestion: string | null = null;
+  let best = Infinity;
+  for (const candidate of known) {
+    const distance = similarity(member, candidate);
+    if (distance <= Math.max(2, Math.floor(member.length * 0.4)) && distance < best) {
+      best = distance;
+      suggestion = candidate;
+    }
+  }
+  return { written, enumName: type.name, member, suggestion };
 }

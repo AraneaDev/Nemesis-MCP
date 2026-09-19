@@ -496,3 +496,132 @@ describe('doubles that cannot exist at runtime', () => {
     expect(found.filter((f) => f.message.includes('is final, so it cannot'))).toHaveLength(1);
   });
 });
+
+describe('contracts about the shape of a call', () => {
+  async function tsRun(
+    source: string,
+    double: Partial<Record<string, unknown>> & { method: string },
+  ) {
+    const { analyzeDoubles } = await import('../../src/core/analyzer.js');
+    const { indexTsFile } = await import('../../src/extractors/ts/index.js');
+    const graph = emptyGraph();
+    await indexTsFile('src/svc.ts', source, graph);
+    return analyzeDoubles({
+      doubles: [
+        {
+          framework: 'vi.spyOn',
+          language: 'typescript',
+          file: 'tests/a.test.ts',
+          line: 3,
+          targetSymbol: 'Svc',
+          methods: [{ name: double.method, line: 3 }],
+          withArity: null,
+          assertedArity: null,
+          returnTypeHint: null,
+          returnExpr: null,
+          confidence: 'definite',
+          ...double,
+        } as never,
+      ],
+      graph,
+      fileLines: new Map([['tests/a.test.ts', ['', '', '', '']]]),
+      options: { strictness: 'all' },
+    });
+  }
+
+  describe('a stub that believes the method is async', () => {
+    const SRC =
+      'export class Svc { sync(): string { return "x"; } async job(): Promise<string> { return "x"; } }';
+
+    it('reports a resolved value on a method that is not awaitable', async () => {
+      // The types line up because the lattice unwraps a promise, so nothing
+      // else here notices that the caller now receives one.
+      const found = await tsRun(SRC, { method: 'sync', resolvedReturn: true });
+      expect(found.map((f) => f.message)).toContain(
+        "Stub resolves a value but Svc::sync returns 'string', which is not awaitable.",
+      );
+    });
+
+    it('says nothing when the method really is awaitable', async () => {
+      expect(await tsRun(SRC, { method: 'job', resolvedReturn: true })).toEqual([]);
+    });
+
+    it('says nothing when the return type is unknown', async () => {
+      const found = await tsRun('export class Svc { sync() {} }', {
+        method: 'sync',
+        resolvedReturn: true,
+      });
+      expect(found).toEqual([]);
+    });
+  });
+
+  describe('a stub that believes the method is fluent', () => {
+    async function phpRun(source: string, method: string) {
+      const { analyzeDoubles } = await import('../../src/core/analyzer.js');
+      const { indexPhpFile } = await import('../../src/extractors/php/index.js');
+      const graph = emptyGraph();
+      await indexPhpFile('src/Q.php', source, graph);
+      return analyzeDoubles({
+        doubles: [
+          {
+            framework: 'PHPUnit_MockObject',
+            language: 'php',
+            file: 'tests/QTest.php',
+            line: 3,
+            targetSymbol: 'App\\Query',
+            method,
+            methods: [{ name: method, line: 3 }],
+            withArity: null,
+            assertedArity: null,
+            returnTypeHint: null,
+            returnExpr: null,
+            returnsSelf: true,
+            confidence: 'definite',
+          },
+        ],
+        graph,
+        fileLines: new Map([['tests/QTest.php', ['', '', '', '']]]),
+        options: { strictness: 'all' },
+      });
+    }
+
+    const SRC =
+      '<?php namespace App; class Query { public function where(string $c): void {} public function chain(): self {} public function me(): static {} public function named(): Query {} }';
+
+    it('reports willReturnSelf on a method that returns nothing', async () => {
+      expect((await phpRun(SRC, 'where')).map((f) => f.message)).toContain(
+        "Stub returns the double itself but App\\Query::where returns 'void', so the method is not fluent.",
+      );
+    });
+
+    it('accepts self, static and the class by name', async () => {
+      for (const method of ['chain', 'me', 'named']) {
+        expect(await phpRun(SRC, method), method).toEqual([]);
+      }
+    });
+  });
+
+  describe('an enum member that no longer exists', () => {
+    const SRC =
+      'export enum Status { Active = "a", Closed = "c" }\nexport class Svc { state(): Status { return Status.Active; } }';
+
+    it('reports a removed member, with a suggestion', async () => {
+      // A renamed case still parses and still type-checks against the enum.
+      const found = await tsRun(SRC, { method: 'state', returnExpr: 'Status.Actve' });
+      expect(found[0]?.message).toContain("has no member 'Actve'");
+      expect(found[0]?.suggestion).toBe('Active');
+    });
+
+    it('accepts a member that is still there', async () => {
+      expect(await tsRun(SRC, { method: 'state', returnExpr: 'Status.Closed' })).toEqual([]);
+    });
+
+    it('says nothing about a holder that is not an enum', async () => {
+      const found = await tsRun(
+        'export class Helper { static make(): string { return "x"; } }\nexport class Svc { state(): string { return "x"; } }',
+        { method: 'state', returnExpr: 'Helper.missing' },
+      );
+      expect(found).toEqual([]);
+    });
+  });
+});
