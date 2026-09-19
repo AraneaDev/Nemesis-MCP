@@ -82,4 +82,57 @@ describe('the module symbol for a Python file', () => {
     const m = await moduleOf('def __getattr__(name):\n    return 1\n');
     expect(m.unknownMembers.has('*')).toBe(true);
   });
+
+  it('takes a decorated top-level function as a member, but not its signature', async () => {
+    const m = await moduleOf('@contextmanager\ndef get_db(x):\n    yield x\n');
+    expect(m.unknownMembers.has('get_db')).toBe(true);
+    // A decorator can change what calling the name does, so the signature
+    // of the undecorated function is not trustworthy as the member's shape.
+    expect(m.methods.has('get_db')).toBe(false);
+  });
+
+  it('takes a top-level class as a member', async () => {
+    const m = await moduleOf(
+      'class BackupRepository(BaseRepository):\n    def save(self):\n        pass\n',
+    );
+    expect(m.unknownMembers.has('BackupRepository')).toBe(true);
+    expect(m.methods.has('BackupRepository')).toBe(false);
+  });
+
+  it('does not take a class method as a module member', async () => {
+    const m = await moduleOf(
+      'class BackupRepository(BaseRepository):\n    def save(self):\n        pass\n',
+    );
+    expect(m.unknownMembers.has('save')).toBe(false);
+  });
+
+  it('binds a plain top-level assignment', async () => {
+    const m = await moduleOf('event_bus = EventBus()\n');
+    expect(m.unknownMembers.has('event_bus')).toBe(true);
+  });
+
+  it('binds an annotated top-level assignment', async () => {
+    const m = await moduleOf('x: int = 1\n');
+    expect(m.unknownMembers.has('x')).toBe(true);
+  });
+
+  it('binds every name in a tuple-unpacking assignment', async () => {
+    const m = await moduleOf('x, y = f()\n');
+    expect(m.unknownMembers.has('x')).toBe(true);
+    expect(m.unknownMembers.has('y')).toBe(true);
+  });
+
+  it('binds nothing for a subscript assignment target', async () => {
+    const m = await moduleOf('_check_services = {}\n_check_services[0] = systemd_service.check\n');
+    // The plain name from the first line binds; the subscript on the second
+    // names no new module member.
+    expect(m.unknownMembers.has('_check_services')).toBe(true);
+    expect([...m.unknownMembers]).not.toContain('check');
+  });
+
+  it('binds nothing for an attribute assignment target', async () => {
+    const m = await moduleOf('obj.attr = 1\n');
+    expect(m.unknownMembers.has('obj')).toBe(false);
+    expect(m.unknownMembers.has('attr')).toBe(false);
+  });
 });

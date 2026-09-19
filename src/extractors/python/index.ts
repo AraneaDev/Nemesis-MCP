@@ -110,6 +110,24 @@ function absolutizeRelative(relFile: string, dots: number, tail: string): string
 }
 
 /**
+ * Plain identifiers bound by an assignment target, recursively unwrapping
+ * tuple/list patterns (`x, y = f()`, `(x, [y, z]) = f()`). A target that is
+ * not a plain identifier — a `subscript` (`arr[0] = ...`) or an `attribute`
+ * (`obj.attr = ...`) — binds no module-level name, so it contributes nothing.
+ */
+function identifiersInTarget(node: SyntaxNode): string[] {
+  if (node.type === 'identifier') return [node.text];
+  if (
+    node.type === 'pattern_list' ||
+    node.type === 'tuple_pattern' ||
+    node.type === 'list_pattern'
+  ) {
+    return node.namedChildren.flatMap(identifiersInTarget);
+  }
+  return [];
+}
+
+/**
  * The module symbol for a Python file: what it defines at the top level, and
  * what it binds from elsewhere.
  *
@@ -146,6 +164,40 @@ function moduleSymbolFor(relFile: string, root: SyntaxNode): TypeSymbol {
       if (fn.name === '__getattr__') sym.unknownMembers.add('*');
       sym.methods.set(fn.name, fn);
       continue;
+    }
+
+    if (child.type === 'decorated_definition') {
+      // A decorator can change what calling the name does — `@contextmanager`
+      // turns a generator function into a context manager, so the declared
+      // signature describes the undecorated function, not the thing a test
+      // patches. The name exists as a module member; its signature does not.
+      const inner = child.namedChildren.find(
+        (c) => c.type === 'function_definition' || c.type === 'class_definition',
+      );
+      const name = inner ? field(inner, 'name')?.text : undefined;
+      if (name) {
+        sym.unknownMembers.add(name);
+        if (name === '__getattr__') sym.unknownMembers.add('*');
+      }
+      continue;
+    }
+
+    if (child.type === 'class_definition') {
+      // The class itself is resolved by name elsewhere; here it only needs
+      // to exist as a module member so `patch("module.ClassName")` resolves.
+      const name = field(child, 'name')?.text;
+      if (name) sym.unknownMembers.add(name);
+      continue;
+    }
+
+    if (child.type === 'expression_statement') {
+      const assign = child.namedChildren[0];
+      if (assign && (assign.type === 'assignment' || assign.type === 'augmented_assignment')) {
+        const left = field(assign, 'left');
+        if (left) {
+          for (const name of identifiersInTarget(left)) sym.unknownMembers.add(name);
+        }
+      }
     }
 
     // `setattr(sys.modules[__name__], ...)` and `globals()[x] = y` put names in
