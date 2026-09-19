@@ -135,4 +135,28 @@ describe('the module symbol for a Python file', () => {
     expect(m.unknownMembers.has('obj')).toBe(false);
     expect(m.unknownMembers.has('attr')).toBe(false);
   });
+
+  it('treats a builtin as a member even when the module neither imports nor defines it', async () => {
+    // unittest.mock has special-cased builtins since Python 3.5: "If you are
+    // patching builtins in a module then you don't need to pass create=True,
+    // it will be added by default." `open` is reachable on any module.
+    const m = await moduleOf('def run():\n    pass\n');
+    expect(m.unknownMembers.has('open')).toBe(true);
+  });
+
+  it('treats print as a member for the same reason', async () => {
+    const m = await moduleOf('def run():\n    pass\n');
+    expect(m.unknownMembers.has('print')).toBe(true);
+  });
+
+  it('treats len as a member for the same reason', async () => {
+    const m = await moduleOf('def run():\n    pass\n');
+    expect(m.unknownMembers.has('len')).toBe(true);
+  });
+
+  it('still reports a name that is neither a builtin nor bound as missing', async () => {
+    const m = await moduleOf('def run():\n    pass\n');
+    expect(m.unknownMembers.has('totally_unbound_name')).toBe(false);
+    expect(m.methods.has('totally_unbound_name')).toBe(false);
+  });
 });
