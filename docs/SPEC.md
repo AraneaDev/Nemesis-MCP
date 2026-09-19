@@ -127,6 +127,15 @@ is listed in `unparsable_fixtures`. Neither makes the scan partial.
    Variadics and optional params are honoured; PHP promoted constructor
    properties count as parameters; when the target's parameter list is unknown
    (e.g. `...$args` spread in test), no finding is emitted.
+
+   The arguments themselves are compared too, where both sides are knowable:
+   a literal passed to `with(...)` or `toHaveBeenCalledWith(...)` is checked
+   against the declared parameter type through the same lattice used for
+   return values. Only literals are compared, so a variable, a matcher such as
+   `$this->anything()` or `expect.any(String)`, or any call is passed over. The
+   check stops at a variadic parameter, ignores arguments beyond the declared
+   list, and stands down entirely when any argument is named, since a named
+   argument's position says nothing about which parameter it fills.
 3. **`RETURN_DRIFT`** — the stub's return value cannot satisfy the declared
    return type of the real method. Both sides are reduced to a canonical
    lattice first, so a `true` literal satisfies `boolean`, `bool` and `Bool`

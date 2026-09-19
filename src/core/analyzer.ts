@@ -4,7 +4,14 @@
 // ---------------------------------------------------------------------------
 
 import path from 'node:path';
-import type { AnalyzeOptions, Finding, SymbolGraph, TestDouble, TypeSymbol } from './types.js';
+import type {
+  AnalyzeOptions,
+  Finding,
+  MethodSymbol,
+  SymbolGraph,
+  TestDouble,
+  TypeSymbol,
+} from './types.js';
 import {
   hasUnresolvedAncestor,
   resolveTarget,
@@ -173,6 +180,15 @@ function classify(d: TestDouble, graph: SymbolGraph, lines: string[]): Finding[]
           });
         }
       }
+    }
+
+    // --- ARGUMENT TYPE DRIFT ------------------------------------------------
+    // A `with(1, 'gbp')` against `charge(string $ref, int $cents)` has the
+    // right number of arguments and the wrong ones. Only literals are
+    // compared, so a variable or a matcher such as `$this->anything()` or
+    // `expect.any(String)` is passed over rather than guessed at.
+    for (const finding of argumentTypeFindings(d, m, owner, real, lines, lang)) {
+      findings.push(finding);
     }
 
     // --- RETURN_DRIFT -------------------------------------------------------
@@ -636,4 +652,42 @@ function nearestField(type: TypeSymbol, key: string): string | null {
     }
   }
   return best ? best.name : null;
+}
+
+/** Compare literal call arguments against the declared parameter types. */
+function argumentTypeFindings(
+  d: TestDouble,
+  m: { name: string; line: number },
+  owner: TypeSymbol,
+  real: MethodSymbol,
+  lines: string[],
+  lang: string,
+): Finding[] {
+  const args = d.withArgs;
+  if (!args || args.length === 0) return [];
+  if (suppressed(lines, m.line)) return [];
+  // A named argument is not positional, so the index says nothing about which
+  // parameter it fills.
+  if (args.some((a) => /^[A-Za-z_$][\w$]*\s*:/.test(a.trim()))) return [];
+
+  const findings: Finding[] = [];
+  for (const [index, argument] of args.entries()) {
+    const param = real.params[index];
+    if (!param || param.variadic) break;
+    if (!param.type || isUntypedSide(param.type)) continue;
+    const literal = inferType(argument, lang);
+    if (!literal) continue; // variable, matcher, call: nothing to compare
+    if (typesCompatible(literal, param.type, lang)) continue;
+    findings.push({
+      file: d.file,
+      line: m.line,
+      type: 'ARITY_MISMATCH',
+      confidence: 'definite',
+      evidence: 'typed',
+      double_type: d.framework,
+      target: `${owner.name}::${m.name}`,
+      message: `Argument ${index + 1} is '${literal}' but ${owner.name}::${m.name} declares '${param.name}' as '${param.type}'.`,
+    });
+  }
+  return findings;
 }

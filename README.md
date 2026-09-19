@@ -18,7 +18,7 @@ classes/interfaces/traits. No tests are executed; results are deterministic.
 | Type | Meaning |
 | --- | --- |
 | `GHOST_METHOD` | The double stubs a method that no longer exists on the target (includes "Did you mean …?" suggestions). |
-| `ARITY_MISMATCH` | The double passes more arguments than the method accepts, or omits required ones. |
+| `ARITY_MISMATCH` | The double passes more arguments than the method accepts, omits required ones, or passes a literal of the wrong type for a declared parameter. |
 | `RETURN_DRIFT` | The stubbed return value cannot satisfy the declared return type, including an object literal missing a required field of the declared type or carrying one that no longer exists. |
 | `VISIBILITY_BREACH` | The double stubs a `private`/`protected` method directly. |
 

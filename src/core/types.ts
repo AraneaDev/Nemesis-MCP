@@ -93,6 +93,8 @@ export interface TestDouble {
   methods: Array<{ name: string; line: number }>;
   /** Argument count passed to a `with(...)` / `toHaveBeenCalledWith(...)` call. */
   withArity: number | null;
+  /** Source text of those arguments, when they were captured. */
+  withArgs?: string[];
   /** Argument count of the assertion call itself. */
   assertedArity: number | null;
   /** Declared return type of the stub, if the test annotates it. */

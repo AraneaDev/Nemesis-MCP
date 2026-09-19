@@ -332,3 +332,75 @@ describe('class heritage', () => {
     expect(hasUnresolvedAncestor(graph, type!)).toBe(true);
   });
 });
+
+describe('literal arguments checked against parameter types', () => {
+  async function run(signature: string, args: string[]) {
+    const { analyzeDoubles } = await import('../../src/core/analyzer.js');
+    const { indexTsFile } = await import('../../src/extractors/ts/index.js');
+    const graph = emptyGraph();
+    await indexTsFile('src/svc.ts', `export class Svc { ${signature} }`, graph);
+    return analyzeDoubles({
+      doubles: [
+        {
+          framework: 'vi.spyOn',
+          language: 'typescript',
+          file: 'tests/a.test.ts',
+          line: 3,
+          targetSymbol: 'Svc',
+          method: 'post',
+          methods: [{ name: 'post', line: 3 }],
+          withArity: args.length,
+          withArgs: args,
+          assertedArity: null,
+          returnTypeHint: null,
+          returnExpr: null,
+          confidence: 'definite',
+        },
+      ],
+      graph,
+      fileLines: new Map([['tests/a.test.ts', ['', '', '', '']]]),
+      options: { strictness: 'all' },
+    }).filter((f) => f.message.startsWith('Argument'));
+  }
+
+  const SIG = 'post(amount: number, currency: string): boolean { return true; }';
+
+  it('accepts arguments of the declared types', async () => {
+    expect(await run(SIG, ['10', "'eur'"])).toEqual([]);
+  });
+
+  it('reports each argument whose literal type is wrong', async () => {
+    // The parameters were reordered in production and the assertion was not.
+    const found = await run(SIG, ["'eur'", '10']);
+    expect(found.map((f) => f.message)).toEqual([
+      "Argument 1 is 'string' but Svc::post declares 'amount' as 'number'.",
+      "Argument 2 is 'number' but Svc::post declares 'currency' as 'string'.",
+    ]);
+  });
+
+  it('says nothing about an argument that is not a literal', async () => {
+    // Variables and matchers carry no type we can read.
+    expect(await run(SIG, ['someValue', 'expect.any(String)'])).toEqual([]);
+  });
+
+  it('says nothing about an untyped parameter', async () => {
+    expect(await run('post(amount: any, currency: unknown) {}', ["'eur'", '10'])).toEqual([]);
+  });
+
+  it('stops at a variadic parameter', async () => {
+    expect(await run('post(...parts: string[]) {}', ['1', '2'])).toEqual([]);
+  });
+
+  it('ignores arguments beyond the declared list', async () => {
+    expect(await run('post(amount: number) {}', ['10', "'extra'"])).toEqual([]);
+  });
+
+  it('accepts null for a nullable parameter', async () => {
+    expect(await run('post(amount: number | null) {}', ['null'])).toEqual([]);
+  });
+
+  it('skips the check entirely when an argument is named', async () => {
+    // A named argument is not positional, so the index says nothing.
+    expect(await run(SIG, ['amount: 10', "currency: 'eur'"])).toEqual([]);
+  });
+});

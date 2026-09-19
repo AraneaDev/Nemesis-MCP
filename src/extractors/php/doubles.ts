@@ -13,6 +13,8 @@ const FACTORY_FNS = /^(createMock|createStub|createPartialMock|mock|spy)$/;
 interface ChainInfo {
   methods: Array<{ name: string; line: number }>;
   withArity: number | null;
+  /** Source text of the `with(...)` arguments, for type comparison. */
+  withArgs: string[];
   /**
    * Every configured return value. `willReturnOnConsecutiveCalls(a, b, c)` and
    * Mockery's `andReturn(a, b)` queue one value per call, and each has to
@@ -23,7 +25,7 @@ interface ChainInfo {
 
 /** Collect method/with/return info walking the fluent chain via `object` fields. */
 function chainInfo(root: SyntaxNode): ChainInfo {
-  const info: ChainInfo = { methods: [], withArity: null, returnExprs: [] };
+  const info: ChainInfo = { methods: [], withArity: null, withArgs: [], returnExprs: [] };
   let cur: SyntaxNode | null = root;
   while (cur) {
     if (cur.type === 'member_call_expression' || cur.type === 'method_call_expression') {
@@ -40,6 +42,7 @@ function chainInfo(root: SyntaxNode): ChainInfo {
       } else if (name === 'with') {
         // `with(...)` on Mockery can also be a constraint; count arguments.
         info.withArity = args?.namedChildCount ?? 0;
+        info.withArgs = (args?.namedChildren ?? []).map((a) => a.text);
       } else if (
         name === 'willReturn' ||
         name === 'willReturnOnConsecutiveCalls' ||
@@ -219,6 +222,7 @@ export async function extractPhpDoubles(relFile: string, source: string): Promis
         method: info.methods[0]?.name ?? null,
         methods: info.methods,
         withArity: index === 0 ? info.withArity : null,
+        ...(index === 0 && info.withArgs.length > 0 ? { withArgs: info.withArgs } : {}),
         assertedArity: null,
         returnTypeHint: null,
         returnExpr,

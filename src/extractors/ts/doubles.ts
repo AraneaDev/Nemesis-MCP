@@ -17,6 +17,7 @@ interface SpyRecord {
   returnTypeHint: string | null;
   returnExpr: string | null;
   assertedArity: number | null;
+  assertedArgs?: string[];
 }
 
 function memberCall(
@@ -213,6 +214,7 @@ export async function extractTsDoubles(
     } else {
       if (call.property === 'toHaveBeenCalledWith' || call.property === 'toBeCalledWith') {
         rec.assertedArity = call.argsNode?.namedChildCount ?? 0;
+        rec.assertedArgs = (call.argsNode?.namedChildren ?? []).map((a) => a.text);
       } else {
         const n = call.argsNode?.namedChildren[0];
         if (n && /^\d+$/.test(n.text)) rec.assertedArity = parseInt(n.text, 10);
@@ -230,6 +232,7 @@ export async function extractTsDoubles(
       method: rec.method,
       methods: rec.method ? [{ name: rec.method, line: rec.line }] : [],
       withArity: null,
+      ...(rec.assertedArgs ? { withArgs: rec.assertedArgs } : {}),
       assertedArity: rec.assertedArity,
       returnTypeHint: rec.returnTypeHint,
       returnExpr: rec.returnExpr,
