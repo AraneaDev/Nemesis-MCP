@@ -513,4 +513,31 @@ describe('paths no test reached before', () => {
       expect(hasUnresolvedAncestor(g, resolveType(g, 'Self')!)).toBe(false);
     });
   });
+
+  describe('a qualified name behind an unqualified one', () => {
+    it('finds the namespaced class when the bare key belongs to another language', () => {
+      // `Mailer` as a key holds only the TypeScript class. The PHP one is
+      // filed under its namespace, and used to be unreachable: the bare key
+      // matched, the language filter emptied it, and the search stopped.
+      const g = emptyGraph();
+      addType(g, cls('Mailer', 'src/Mailer.ts', ['send']));
+      addType(g, cls('App\\Mail\\Mailer', 'src/Mail/Mailer.php', ['send']));
+      const found = resolveType(g, 'Mailer', {
+        language: 'php',
+        fromFile: 'tests/MailerTest.php',
+      });
+      expect(found?.file).toBe('src/Mail/Mailer.php');
+    });
+
+    it('still prefers an exact match in its own language', () => {
+      const g = emptyGraph();
+      addType(g, cls('Mailer', 'src/Mailer.ts', ['send']));
+      addType(g, cls('App.Mail.Mailer', 'src/mail/mailer.ts', ['send']));
+      const found = resolveType(g, 'Mailer', {
+        language: 'typescript',
+        fromFile: 'tests/mailer.test.ts',
+      });
+      expect(found?.file).toBe('src/Mailer.ts');
+    });
+  });
 });

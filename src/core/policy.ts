@@ -5,4 +5,3 @@ export function passesStrictness(strictness: Strictness, finding: Finding): bool
   if (strictness === 'breaking_only') return finding.confidence === 'definite';
   return finding.evidence === 'untyped';
 }
-

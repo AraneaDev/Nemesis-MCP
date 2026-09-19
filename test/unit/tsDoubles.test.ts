@@ -35,15 +35,20 @@ describe('spies', () => {
     }
   });
 
-  it('records an implementation without inventing a return value', async () => {
-    const [d] = await doubles(`${PRELUDE}vi.spyOn(s, 'load').mockImplementation(() => 1);`);
-    expect(d?.method).toBe('load');
-    expect(d?.returnExpr).toBeNull();
+  it('reads the value out of a concise implementation, but not out of a block', async () => {
+    const [concise] = await doubles(`${PRELUDE}vi.spyOn(s, 'load').mockImplementation(() => 1);`);
+    expect(concise?.method).toBe('load');
+    expect(concise?.returnExpr).toBe('1');
+    const [block] = await doubles(
+      `${PRELUDE}vi.spyOn(s, 'load').mockImplementation(() => { return 1; });`,
+    );
+    expect(block?.returnExpr).toBeNull();
   });
 
-  it('reads a spy on a prototype', async () => {
+  it('reads a spy on a prototype as a spy on the class instance side', async () => {
     const [d] = await doubles(`${PRELUDE}vi.spyOn(Svc.prototype, 'load').mockReturnValue(1);`);
-    expect(d?.targetSymbol).toBe('Svc.prototype');
+    expect(d?.targetSymbol).toBe('Svc');
+    expect(d?.staticReceiver).toBe(false);
     expect(d?.method).toBe('load');
   });
 

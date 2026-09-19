@@ -50,20 +50,38 @@ async function readIfPossible(
 ): Promise<string | null> {
   const absolute = path.join(rootDir, relFile);
   if (Date.now() > budget.deadline) {
-    diagnostics.push({ file: relFile, ...(languageOf(relFile) ? { language: languageOf(relFile)! } : {}), stage: 'budget', message: 'Audit duration limit exceeded', fatal: true });
+    diagnostics.push({
+      file: relFile,
+      ...(languageOf(relFile) ? { language: languageOf(relFile)! } : {}),
+      stage: 'budget',
+      message: 'Audit duration limit exceeded',
+      fatal: true,
+    });
     return null;
   }
   try {
     const info = await stat(absolute);
     if (info.size > maxFileBytes) {
-      diagnostics.push({ file: relFile, ...(languageOf(relFile) ? { language: languageOf(relFile)! } : {}), stage: 'budget', message: `File exceeds ${maxFileBytes} byte limit`, fatal: false });
+      diagnostics.push({
+        file: relFile,
+        ...(languageOf(relFile) ? { language: languageOf(relFile)! } : {}),
+        stage: 'budget',
+        message: `File exceeds ${maxFileBytes} byte limit`,
+        fatal: false,
+      });
       return null;
     }
     const source = await readFile(absolute, 'utf8');
     budget.bytes += Buffer.byteLength(source, 'utf8');
     return source;
   } catch (error) {
-    diagnostics.push({ file: relFile, ...(languageOf(relFile) ? { language: languageOf(relFile)! } : {}), stage: 'read', message: error instanceof Error ? error.message : String(error), fatal: true });
+    diagnostics.push({
+      file: relFile,
+      ...(languageOf(relFile) ? { language: languageOf(relFile)! } : {}),
+      stage: 'read',
+      message: error instanceof Error ? error.message : String(error),
+      fatal: true,
+    });
     return null;
   }
 }
@@ -94,8 +112,19 @@ async function indexProduction(
       }
     } catch (error) {
       const language = languageOf(rel);
-      diagnostics.push({ file: rel, ...(language ? { language } : {}), stage: 'index', message: error instanceof Error ? error.message : String(error), fatal: false });
-      if (language && !graph.skippedLanguages.includes(language) && /grammar|language|wasm/i.test(error instanceof Error ? error.message : String(error))) graph.skippedLanguages.push(language);
+      diagnostics.push({
+        file: rel,
+        ...(language ? { language } : {}),
+        stage: 'index',
+        message: error instanceof Error ? error.message : String(error),
+        fatal: false,
+      });
+      if (
+        language &&
+        !graph.skippedLanguages.includes(language) &&
+        /grammar|language|wasm/i.test(error instanceof Error ? error.message : String(error))
+      )
+        graph.skippedLanguages.push(language);
     }
   }
 }
@@ -139,7 +168,13 @@ async function extractDoubles(
       }
     } catch (error) {
       const language = languageOf(rel);
-      diagnostics.push({ file: rel, ...(language ? { language } : {}), stage: 'extract', message: error instanceof Error ? error.message : String(error), fatal: false });
+      diagnostics.push({
+        file: rel,
+        ...(language ? { language } : {}),
+        stage: 'extract',
+        message: error instanceof Error ? error.message : String(error),
+        fatal: false,
+      });
     }
   }
   return { doubles, fileLines };
@@ -157,19 +192,30 @@ export async function runAudit(opts: RuntimeOptions): Promise<AuditResult> {
     const root = await stat(rootDir);
     if (!root.isDirectory()) throw new Error(`Scan root is not a directory: ${rootDir}`);
   } catch (error) {
-    throw new Error(`Cannot scan root '${rootDir}': ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(
+      `Cannot scan root '${rootDir}': ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
   for (const requested of opts.paths ?? []) {
     try {
       await stat(path.join(rootDir, requested));
     } catch (error) {
-      throw new Error(`Requested scan path '${requested}' does not exist: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(
+        `Requested scan path '${requested}' does not exist: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
-  const discovered = await discoverFiles(rootDir, { extraExcludes: opts.extraExcludes ?? [], diagnostics });
+  const discovered = await discoverFiles(rootDir, {
+    extraExcludes: opts.extraExcludes ?? [],
+    diagnostics,
+  });
   const discoveredCount = discovered.testFiles.length + discovered.productionFiles.length;
   if (discoveredCount > maxFiles) {
-    diagnostics.push({ stage: 'budget', message: `Scan contains ${discoveredCount} files; limit is ${maxFiles}`, fatal: true });
+    diagnostics.push({
+      stage: 'budget',
+      message: `Scan contains ${discoveredCount} files; limit is ${maxFiles}`,
+      fatal: true,
+    });
   }
   let remainingFiles = maxFiles;
   const bounded = (files: string[]): string[] => {
@@ -186,14 +232,26 @@ export async function runAudit(opts: RuntimeOptions): Promise<AuditResult> {
   };
 
   const testFiles = bounded(restrict(filterByLanguages(discovered.testFiles, opts.languages)));
-  const productionFiles = bounded(restrict(filterByLanguages(discovered.productionFiles, opts.languages)));
+  const productionFiles = bounded(
+    restrict(filterByLanguages(discovered.productionFiles, opts.languages)),
+  );
 
   const graph = emptyGraph();
   await indexProduction(productionFiles, rootDir, graph, diagnostics, maxFileBytes, budget);
 
-  const { doubles, fileLines } = await extractDoubles(testFiles, rootDir, diagnostics, maxFileBytes, budget);
+  const { doubles, fileLines } = await extractDoubles(
+    testFiles,
+    rootDir,
+    diagnostics,
+    maxFileBytes,
+    budget,
+  );
   if (budget.bytes > maxTotalBytes) {
-    diagnostics.push({ stage: 'budget', message: `Audit read ${budget.bytes} bytes; limit is ${maxTotalBytes}`, fatal: true });
+    diagnostics.push({
+      stage: 'budget',
+      message: `Audit read ${budget.bytes} bytes; limit is ${maxTotalBytes}`,
+      fatal: true,
+    });
   }
 
   const findings = analyzeDoubles({ doubles, graph, fileLines, options: opts });
@@ -233,37 +291,60 @@ export async function verifySymbol(
 ): Promise<SymbolReport> {
   const { rootDir } = opts;
   const diagnostics: ScanDiagnostic[] = [];
-  const discovered = await discoverFiles(rootDir, { extraExcludes: opts.extraExcludes ?? [], diagnostics });
+  const discovered = await discoverFiles(rootDir, {
+    extraExcludes: opts.extraExcludes ?? [],
+    diagnostics,
+  });
   const productionFiles = filterByLanguages(discovered.productionFiles, opts.languages);
-  const testFiles = restrict(
-    filterByLanguages(discovered.testFiles, opts.languages),
-    opts.paths,
-  );
+  const testFiles = restrict(filterByLanguages(discovered.testFiles, opts.languages), opts.paths);
 
   const graph = emptyGraph();
   const budget = { bytes: 0, deadline: Date.now() + (opts.maxDurationMs ?? 120_000) };
-  await indexProduction(productionFiles, rootDir, graph, diagnostics, opts.maxFileBytes ?? 2_000_000, budget);
+  await indexProduction(
+    productionFiles,
+    rootDir,
+    graph,
+    diagnostics,
+    opts.maxFileBytes ?? 2_000_000,
+    budget,
+  );
 
-  // Resolve the symbol: qualified or short name.
+  // Resolve the symbol: qualified or short name. A name that resolves to
+  // nothing, or to two things, is still worth reporting on: the doubles that
+  // name it are exactly what a reader asking about a deleted or duplicated
+  // class wants to see, and `audit` already reports them.
   const wanted = normalizeSymbolName(symbolName);
   let found: TypeSymbol | null = null;
+  let ambiguous = false;
   for (const [k, t] of graph.types) {
     const normalized = normalizeSymbolName(k);
-    if (normalized === wanted || normalized.endsWith(`.${wanted}`) || normalized.split('.').pop() === wanted) {
-      if (found) return { symbol: symbolName, resolved: false, signature: null, ...(diagnostics.length ? { diagnostics } : {}), doubles: [] };
+    if (
+      normalized === wanted ||
+      normalized.endsWith(`.${wanted}`) ||
+      normalized.split('.').pop() === wanted
+    ) {
+      if (found) {
+        ambiguous = true;
+        break;
+      }
       found = t;
     }
   }
-  if (!found) {
-    return { symbol: symbolName, resolved: false, signature: null, ...(diagnostics.length ? { diagnostics } : {}), doubles: [] };
-  }
+  if (ambiguous) found = null;
 
-  const { doubles, fileLines } = await extractDoubles(testFiles, rootDir, diagnostics, opts.maxFileBytes ?? 2_000_000, budget);
+  const { doubles, fileLines } = await extractDoubles(
+    testFiles,
+    rootDir,
+    diagnostics,
+    opts.maxFileBytes ?? 2_000_000,
+    budget,
+  );
   const findings = analyzeDoubles({ doubles, graph, fileLines, options: opts });
 
   const report: SymbolReport['doubles'] = [];
-  const targetLower = normalizeSymbolName(found.name);
-  const shortLower = (normalizeSymbolName(found.name).split('.').pop() ?? normalizeSymbolName(found.name));
+  const matchName = normalizeSymbolName(found?.name ?? wanted);
+  const targetLower = matchName;
+  const shortLower = matchName.split('.').pop() ?? matchName;
 
   // Candidate doubles for this symbol (in scan order).
   interface Candidate {
@@ -323,12 +404,28 @@ export async function verifySymbol(
     });
   });
 
+  if (!found) {
+    return {
+      symbol: symbolName,
+      resolved: false,
+      signature: null,
+      ...(diagnostics.length ? { diagnostics } : {}),
+      doubles: report,
+    };
+  }
+
   const methods = [...found.methods.values()];
   const signature = methods.length
     ? `${found.name} { ${methods.map((m) => `${m.name}(${m.params.map((p) => p.name).join(', ')})${m.returnType ? ': ' + m.returnType : ''}`).join('; ')} }`
     : `${found.name} (${found.kind})`;
 
-  return { symbol: found.name, resolved: true, signature, ...(diagnostics.length ? { diagnostics } : {}), doubles: report };
+  return {
+    symbol: found.name,
+    resolved: true,
+    signature,
+    ...(diagnostics.length ? { diagnostics } : {}),
+    doubles: report,
+  };
 }
 
 function restrict(files: string[], paths?: string[]): string[] {

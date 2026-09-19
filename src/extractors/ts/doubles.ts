@@ -20,6 +20,9 @@ interface SpyRecord {
   assertedArgs?: string[];
   resolvedReturn?: boolean;
   accessType?: string | null;
+  fakeArity?: number | null;
+  fakeParamTypes?: (string | null)[];
+  staticReceiver?: boolean | undefined;
 }
 
 function memberCall(
@@ -71,29 +74,48 @@ function initTypeName(init: SyntaxNode): string | null {
 function spyTargetOf(
   spyCall: SyntaxNode,
   varTypes: Map<string, string>,
-): { target: string | null; method: string | null; accessType: string | null } {
+): {
+  target: string | null;
+  method: string | null;
+  accessType: string | null;
+  staticReceiver?: boolean | undefined;
+} {
   const args = field(spyCall, 'arguments');
   if (!args) return { target: null, method: null, accessType: null };
   const children = args.namedChildren;
   const first = children[0];
   if (!first) return { target: null, method: null, accessType: null };
   let target: string | null = null;
+  // Whether the spy was pointed at the class itself or at an instance of it.
+  // Left undefined where neither is clear, such as `this.svc` or `a.b.c`.
+  let staticReceiver: boolean | undefined;
   if (first.type === 'identifier') {
     // A tracked variable names its type; anything else is taken at face value,
     // which is how `vi.spyOn(Svc, 'build')` reaches the class's static member.
     // An identifier that names nothing in the graph simply fails to resolve.
-    target = varTypes.get(first.text) ?? first.text;
+    const known = varTypes.get(first.text);
+    target = known ?? first.text;
+    staticReceiver = known === undefined;
   } else if (first.type === 'member_expression' || first.type === 'this') {
     target = first.text;
+    // `Klass.prototype` is the instance side of the class, and the usual way
+    // to spy on an instance method without having an instance. Left as-is it
+    // resolved to nothing, so none of these doubles were checked at all.
+    const proto = /^(.*)\.prototype$/.exec(first.text);
+    if (proto?.[1]) {
+      target = proto[1];
+      staticReceiver = false;
+    }
   } else if (first.type === 'new_expression') {
     target = initTypeName(first);
+    staticReceiver = false;
   }
   const second = children[1];
   const method = second ? unquote(second.text) : null;
   // `vi.spyOn(obj, 'x', 'get')` replaces the accessor rather than a method.
   const third = children[2];
   const accessType = third ? unquote(third.text) : null;
-  return { target, method, accessType };
+  return { target, method, accessType, staticReceiver };
 }
 
 /** Declared type from `as Foo` / `: Foo` around `node` (walks outward). */
@@ -130,6 +152,33 @@ function literalType(expr: string | null): string | null {
 
 const RETURN_SETTERS = /^mock(ResolvedValue|ReturnValue|ResolvedValueOnce|ReturnValueOnce)$/;
 const ARITY_ASSERTIONS = /^(toHaveBeenCalledWith|toBeCalledWith)$/;
+const IMPLEMENTATIONS = /^mockImplementation(Once)?$/;
+
+/**
+ * The parameter list a replacement function declares, when it declares one
+ * literally. A reference to a function defined elsewhere, or a rest
+ * parameter, means the arity is not decidable here and the answer is null.
+ */
+function fakeSignature(
+  fn: SyntaxNode | undefined,
+): { arity: number; types: (string | null)[]; body: SyntaxNode | null } | null {
+  if (!fn) return null;
+  if (fn.type !== 'arrow_function' && fn.type !== 'function_expression') return null;
+  const body = field(fn, 'body');
+  // `x => x`, an arrow with one unparenthesised parameter.
+  const single = field(fn, 'parameter');
+  if (single) return { arity: 1, types: [null], body };
+  const params = field(fn, 'parameters');
+  if (!params) return null;
+  const declared = params.namedChildren.filter((c) => c.type !== 'comment');
+  if (declared.some((c) => c.type === 'rest_pattern' || c.text.startsWith('...'))) return null;
+  // What each parameter says it takes, where it says anything at all.
+  const types = declared.map((p) => {
+    const annotation = field(p, 'type');
+    return annotation ? annotation.text.replace(/^:\s*/, '').trim() : null;
+  });
+  return { arity: declared.length, types, body };
+}
 
 export interface TsDoublesResult {
   doubles: TestDouble[];
@@ -168,12 +217,13 @@ export async function extractTsDoubles(
     if (!call || call.property !== 'spyOn') continue;
     const rootName = apiRoot(call);
     if (!rootName) continue;
-    const { target, method, accessType } = spyTargetOf(node, varTypes);
+    const { target, method, accessType, staticReceiver } = spyTargetOf(node, varTypes);
     const rec: SpyRecord = {
       framework: `${rootName}.spyOn`,
       target,
       method,
       accessType,
+      staticReceiver,
       line: node.startPosition.row + 1,
       returnTypeHint: null,
       returnExpr: null,
@@ -200,7 +250,8 @@ export async function extractTsDoubles(
 
     const isSetter = RETURN_SETTERS.test(call.property);
     const isArity = ARITY_ASSERTIONS.test(call.property);
-    if (!isSetter && !isArity) continue;
+    const isFake = IMPLEMENTATIONS.test(call.property);
+    if (!isSetter && !isArity && !isFake) continue;
 
     const obj = field(call.fn, 'object');
     const byVar = obj?.type === 'identifier' ? spyVars.get(obj.text) : undefined;
@@ -208,7 +259,21 @@ export async function extractTsDoubles(
       byVar ?? findOwningSpy(node, byCall, spyVars) ?? adoptTypedMember(node, varTypes, spies);
     if (!rec) continue;
 
-    if (isSetter) {
+    if (isFake) {
+      // A replacement function states, in code, what the test believes the
+      // signature to be. Parameters it declares beyond the real ones are
+      // always undefined, and the body's value stands in for the return.
+      const sig = fakeSignature(call.argsNode?.namedChildren[0]);
+      if (!sig) continue;
+      rec.fakeArity = sig.arity;
+      rec.fakeParamTypes = sig.types;
+      const body = sig.body;
+      // Only a concise body is a return value; a block needs following.
+      if (body && body.type !== 'statement_block' && rec.returnExpr === null) {
+        rec.returnExpr = body.text;
+        rec.returnTypeHint = literalType(body.text);
+      }
+    } else if (isSetter) {
       const expr = call.argsNode?.namedChildren[0]?.text ?? null;
       const dt = declaredTypeOf(node);
       rec.returnExpr = expr;
@@ -241,10 +306,15 @@ export async function extractTsDoubles(
       withArity: null,
       ...(rec.assertedArgs ? { withArgs: rec.assertedArgs } : {}),
       assertedArity: rec.assertedArity,
+      ...(rec.fakeArity !== null && rec.fakeArity !== undefined
+        ? { fakeArity: rec.fakeArity }
+        : {}),
+      ...(rec.fakeParamTypes ? { fakeParamTypes: rec.fakeParamTypes } : {}),
       returnTypeHint: rec.returnTypeHint,
       returnExpr: rec.returnExpr,
       ...(rec.resolvedReturn ? { resolvedReturn: true } : {}),
       ...(rec.accessType ? { accessType: rec.accessType } : {}),
+      ...(rec.staticReceiver !== undefined ? { staticReceiver: rec.staticReceiver } : {}),
       confidence: rec.target ? 'definite' : 'warning',
     });
   }

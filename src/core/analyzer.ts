@@ -60,6 +60,8 @@ function classify(
   lines: string[],
   /** Targets already reported as undoubleable, so one class is named once. */
   reportedFinalTargets: Set<string>,
+  /** Symbol names the graph holds, keyed by the file they came from. */
+  symbolsByFile: Map<string, Set<string>>,
 ): Finding[] {
   const findings: Finding[] = [];
   if (!d.targetSymbol) return findings;
@@ -80,7 +82,22 @@ function classify(
   const type =
     resolveType(graph, d.targetSymbol, hint) ??
     (methodNames.length === 0 ? (resolveTarget(graph, d.targetSymbol, hint)?.type ?? null) : null);
-  if (!type) return findings; // UNRESOLVED → skipped, never guessed
+  if (!type) {
+    const gone = importedButGone(d, lines, symbolsByFile);
+    if (gone && !suppressed(lines, d.line)) {
+      findings.push({
+        file: d.file,
+        line: d.line,
+        type: 'GHOST_METHOD',
+        confidence: 'definite',
+        evidence: 'typed',
+        double_type: d.framework,
+        target: d.targetSymbol,
+        message: `'${gone.symbol}' is imported from '${gone.specifier}', which this scan read, and is not declared there any more.`,
+      });
+    }
+    return findings; // otherwise UNRESOLVED → skipped, never guessed
+  }
 
   // A double of a final class cannot be built at all: PHPUnit refuses to
   // generate a subclass for it, so every test using this mock dies at runtime
@@ -210,6 +227,91 @@ function classify(
           });
         }
       }
+    }
+
+    // In JavaScript a static member lives on the class and an instance member
+    // on the prototype, so a spy pointed at the wrong one finds `undefined`
+    // and the framework throws. The receiver says which one the test meant.
+    if (
+      (lang === 'typescript' || lang === 'javascript') &&
+      d.staticReceiver !== undefined &&
+      !suppressed(lines, m.line)
+    ) {
+      const isStatic = (real.modifiers ?? []).includes('static');
+      // A receiver is the class only when it is spelled like the class.
+      // `const logger = internals.logger`, `dictionaryService`,
+      // `levelManager`: each of these is an instance whose declaration this
+      // file does not show, and each resolves to the class of the same name
+      // because resolution ignores case. Requiring an exact match is what
+      // separates `vi.spyOn(Clock, …)` from `vi.spyOn(clock, …)`.
+      const spelledLikeTheClass =
+        (d.targetSymbol ?? '') === (type.name.split(/[\\.]/).pop() ?? type.name);
+      if (d.staticReceiver && !spelledLikeTheClass) {
+        // Nothing to say: the receiver is an instance under another name.
+      } else if (d.staticReceiver && !isStatic) {
+        findings.push({
+          file: d.file,
+          line: m.line,
+          type: 'GHOST_METHOD',
+          confidence: 'definite',
+          evidence: 'typed',
+          double_type: d.framework,
+          target: `${owner.name}::${m.name}`,
+          message: `'${m.name}' is an instance method of '${owner.name}', so it is not a member of the class itself.`,
+        });
+      } else if (!d.staticReceiver && isStatic) {
+        findings.push({
+          file: d.file,
+          line: m.line,
+          type: 'GHOST_METHOD',
+          confidence: 'definite',
+          evidence: 'typed',
+          double_type: d.framework,
+          target: `${owner.name}::${m.name}`,
+          message: `'${m.name}' is static on '${owner.name}', so it is not a member of an instance.`,
+        });
+      }
+    }
+
+    // A replacement function declaring more parameters than the method has is
+    // a signature the test believes in and the code no longer offers: the
+    // extra parameter is handed `undefined` on every call, silently. Fewer
+    // parameters is ordinary, so only the excess is reported.
+    if (d.fakeArity !== null && d.fakeArity !== undefined) {
+      const params = real.params;
+      if (!params.some((p) => p.variadic) && d.fakeArity > params.length) {
+        if (!suppressed(lines, m.line)) {
+          findings.push({
+            file: d.file,
+            line: m.line,
+            type: 'ARITY_MISMATCH',
+            confidence: 'definite',
+            evidence: 'typed',
+            double_type: d.framework,
+            target: `${owner.name}::${m.name}`,
+            message: `Replacement function declares ${d.fakeArity} parameter(s) but '${owner.name}::${m.name}' passes at most ${params.length}.`,
+          });
+        }
+      }
+      // A parameter the fake annotates has to accept what the method hands it.
+      // Both sides annotated is the only case with anything to compare.
+      (d.fakeParamTypes ?? []).forEach((fakeType, index) => {
+        const param = params[index];
+        if (!fakeType || !param?.type || param.variadic) return;
+        if (isUntypedSide(fakeType) || isUntypedSide(param.type)) return;
+        if (typesCompatible(param.type, fakeType, lang)) return;
+        if (suppressed(lines, m.line)) return;
+        findings.push({
+          file: d.file,
+          line: m.line,
+          type: 'ARITY_MISMATCH',
+          confidence: 'definite',
+          evidence: 'typed',
+          double_type: d.framework,
+          target: `${owner.name}::${m.name}`,
+          message: `Replacement function declares parameter ${index + 1} as '${fakeType}' but '${owner.name}::${m.name}' passes '${param.type}'.`,
+        });
+      });
     }
 
     // --- UNDOUBLEABLE MEMBERS -----------------------------------------------
@@ -659,9 +761,17 @@ export interface AnalyzeInput {
 export function analyzeDoubles(input: AnalyzeInput): Finding[] {
   const findings: Finding[] = [];
   const reportedFinalTargets = new Set<string>();
+  const symbolsByFile = new Map<string, Set<string>>();
+  for (const variants of input.graph.typeVariants.values()) {
+    for (const variant of variants) {
+      const names = symbolsByFile.get(variant.file) ?? new Set<string>();
+      names.add(variant.name.split(/[\\.]/).pop() ?? variant.name);
+      symbolsByFile.set(variant.file, names);
+    }
+  }
   for (const d of input.doubles) {
     const lines = input.fileLines.get(d.file) ?? [];
-    findings.push(...classify(d, input.graph, lines, reportedFinalTargets));
+    findings.push(...classify(d, input.graph, lines, reportedFinalTargets, symbolsByFile));
   }
   const seen = new Set<string>();
   const deduped = findings.filter((f) => {
@@ -1130,4 +1240,79 @@ function literalUnionCheck(
 
   const written = literal.trim().replace(/^(['"`])([\s\S]*)\1$/, '$2');
   return allowed.includes(written) ? 'ok' : { allowed };
+}
+
+const IMPORT_NAMED = /^\s*import\s+(?:type\s+)?\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]/;
+const IMPORT_DEFAULT = /^\s*import\s+(?:type\s+)?([A-Za-z_$][\w$]*)\s+from\s*['"]([^'"]+)['"]/;
+const EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs'];
+
+/**
+ * A target the test imports from a file this scan actually read, where that
+ * file no longer declares it: a class that was renamed or deleted and left a
+ * double behind.
+ *
+ * Every part of that sentence is load-bearing. An earlier attempt inferred it
+ * from a failed resolution alone and was wrong every time, because resolution
+ * also fails for a namespace import, for a value rather than a type, for an
+ * alias, and for an ambiguous name. So: only a named or default import, only a
+ * relative specifier, only when the resolved file gave the graph at least one
+ * symbol, and the name looked up is the one the module exports rather than the
+ * one the test calls it.
+ */
+function importedButGone(
+  d: TestDouble,
+  lines: string[],
+  symbolsByFile: Map<string, Set<string>>,
+): { symbol: string; specifier: string } | null {
+  if (d.language !== 'typescript' && d.language !== 'javascript') return null;
+  const wanted = (d.targetSymbol ?? '').split(/[\\.]/).pop() ?? '';
+  if (!wanted) return null;
+  // Only a name shaped like a type. The graph holds types, so an `export
+  // const sounds = new SoundManager()` is absent from it while being very
+  // much present in the file, and reporting it would be wrong. A double
+  // pointing at a module object or an instance is unverifiable regardless.
+  if (!/^[A-Z]/.test(wanted)) return null;
+
+  for (const line of lines) {
+    const named = IMPORT_NAMED.exec(line);
+    const fallback = named ? null : IMPORT_DEFAULT.exec(line);
+    const specifier = named?.[2] ?? fallback?.[2];
+    if (!specifier || !specifier.startsWith('.')) continue;
+
+    // The exported name, which an alias hides: `import { Foo as Bar }` binds
+    // Bar in the test and Foo in the module.
+    let exported: string | null = null;
+    if (named?.[1]) {
+      for (const part of named[1].split(',')) {
+        const [source, alias] = part.split(/\s+as\s+/).map((x) => x.trim());
+        if (!source) continue;
+        if ((alias ?? source) === wanted) exported = source;
+      }
+    } else if (fallback?.[1] === wanted) {
+      exported = wanted;
+    }
+    if (!exported) continue;
+
+    for (const candidate of resolveSpecifier(d.file, specifier)) {
+      const names = symbolsByFile.get(candidate);
+      if (!names || names.size === 0) continue; // never read, or holds no types
+      if (names.has(exported)) return null; // still there under another route
+      return { symbol: exported, specifier };
+    }
+  }
+  return null;
+}
+
+/** Repository-relative paths a relative specifier could mean. */
+function resolveSpecifier(fromFile: string, specifier: string): string[] {
+  const base = path.posix.normalize(
+    path.posix.join(path.posix.dirname(fromFile.split(path.sep).join('/')), specifier),
+  );
+  const stripped = base.replace(/\.(m|c)?js$/, ''); // ESM TypeScript writes .js
+  const out: string[] = [];
+  for (const stem of new Set([base, stripped])) {
+    for (const extension of EXTENSIONS) out.push(stem + extension);
+    for (const extension of EXTENSIONS) out.push(`${stem}/index${extension}`);
+  }
+  return out;
 }

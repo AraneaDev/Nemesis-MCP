@@ -23,6 +23,30 @@ interface ChainInfo {
    * satisfy the declared return type; only the first was ever looked at.
    */
   returnExprs: string[];
+  /**
+   * The signature a `willReturnCallback` / `andReturnUsing` closure declares.
+   * PHP calls it with the arguments the stubbed method received, so a
+   * parameter the method no longer passes raises ArgumentCountError the first
+   * time the stub is exercised, and never before.
+   */
+  fakeArity: number | null;
+  fakeParamTypes: (string | null)[];
+}
+
+/**
+ * Parameters a closure declares literally. A callable passed by name, or one
+ * taking `...$rest`, leaves the arity undecidable.
+ */
+function closureSignature(node: SyntaxNode): { arity: number; types: (string | null)[] } | null {
+  // The grammar wraps each argument in an `argument` node.
+  const fn = node.type === 'argument' ? (node.namedChildren[0] ?? node) : node;
+  if (fn.type !== 'anonymous_function' && fn.type !== 'arrow_function') return null;
+  const params = field(fn, 'parameters');
+  if (!params) return { arity: 0, types: [] };
+  const declared = params.namedChildren.filter((c) => c.type !== 'comment');
+  if (declared.some((c) => c.type === 'variadic_parameter')) return null;
+  const types = declared.map((p) => field(p, 'type')?.text.trim() ?? null);
+  return { arity: declared.length, types };
 }
 
 /** Collect method/with/return info walking the fluent chain via `object` fields. */
@@ -33,6 +57,8 @@ function chainInfo(root: SyntaxNode): ChainInfo {
     withArgs: [],
     returnsSelf: false,
     returnExprs: [],
+    fakeArity: null,
+    fakeParamTypes: [],
   };
   let cur: SyntaxNode | null = root;
   while (cur) {
@@ -63,13 +89,25 @@ function chainInfo(root: SyntaxNode): ChainInfo {
         name === 'andReturnUsing'
       ) {
         if (name === 'willReturnSelf' || name === 'andReturnSelf') info.returnsSelf = true;
-        const values =
-          name === 'willReturnOnConsecutiveCalls' || name === 'andReturn'
+        // A callback is a way of producing the return value, not the value.
+        // Reading one as a value reported `willReturnCallback('handler')` as a
+        // stub returning a string.
+        const isCallback = name === 'willReturnCallback' || name === 'andReturnUsing';
+        const values = isCallback
+          ? []
+          : name === 'willReturnOnConsecutiveCalls' || name === 'andReturn'
             ? (args?.namedChildren ?? []).map((a) => a.text)
             : firstArg
               ? [firstArg.text]
               : [];
         if (values.length > 0) info.returnExprs = values;
+        if (isCallback && firstArg) {
+          const sig = closureSignature(firstArg);
+          if (sig) {
+            info.fakeArity = sig.arity;
+            info.fakeParamTypes = sig.types;
+          }
+        }
       }
       cur = field(cur, 'object');
     } else if (cur.type === 'scoped_call_expression') {
@@ -237,6 +275,10 @@ export async function extractPhpDoubles(relFile: string, source: string): Promis
         returnTypeHint: null,
         returnExpr,
         ...(index === 0 && info.returnsSelf ? { returnsSelf: true } : {}),
+        ...(index === 0 && info.fakeArity !== null ? { fakeArity: info.fakeArity } : {}),
+        ...(index === 0 && info.fakeParamTypes.length > 0
+          ? { fakeParamTypes: info.fakeParamTypes }
+          : {}),
         confidence: 'definite',
       });
     }

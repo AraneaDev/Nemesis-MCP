@@ -147,7 +147,15 @@ export function resolveType(
   if (!name) return null;
   const k = key(name);
   const direct = graph.typeVariants.get(k);
-  if (direct && direct.length > 0) return pickCandidate(direct, hint);
+  if (direct && direct.length > 0) {
+    const hit = pickCandidate(direct, hint);
+    // An exact key match wins, but only if it survives the language filter.
+    // Returning its failure hid every namespaced PHP class whose short name
+    // was also taken by an unqualified class in another language: the bare
+    // key matched, the filter emptied it, and the qualified declaration
+    // sitting in the graph was never looked for.
+    if (hit) return hit;
+  }
 
   // short-name fallback: unique match among qualified names
   const wanted = normalizeSymbolName(name).split('.').pop() ?? normalizeSymbolName(name);

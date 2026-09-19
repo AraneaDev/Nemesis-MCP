@@ -224,13 +224,15 @@ async function execute(args: CliArgs, rootDir: string): Promise<number> {
 
     if (args.json) {
       console.log(JSON.stringify(report, null, 2));
-    } else if (!report.resolved) {
-      console.log(`Symbol '${report.symbol}' could not be resolved in the production code.`);
     } else {
-      console.log(`Symbol: ${report.symbol}`);
-      if (report.signature) console.log(`  ${report.signature}`);
+      if (!report.resolved) {
+        console.log(`Symbol '${report.symbol}' could not be resolved in the production code.`);
+      } else {
+        console.log(`Symbol: ${report.symbol}`);
+        if (report.signature) console.log(`  ${report.signature}`);
+      }
       if (report.doubles.length === 0) {
-        console.log('  No test doubles point at this symbol.');
+        if (report.resolved) console.log('  No test doubles point at this symbol.');
       } else {
         for (const d of report.doubles) {
           console.log(

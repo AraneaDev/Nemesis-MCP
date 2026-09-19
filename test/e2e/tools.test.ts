@@ -126,7 +126,10 @@ describe('audit and verify-symbol agree', () => {
         resolved: boolean;
         doubles: Array<{ violations: typeof violations }>;
       };
-      expect(report.resolved).toBe(true);
+      // A target that audit reports on always has doubles here, whether or not
+      // the name resolves: an unresolvable name is the deleted-target finding,
+      // and answering it with silence would make this comparison vacuous.
+      expect(report.doubles.length).toBeGreaterThan(0);
       for (const double of report.doubles) {
         for (const v of double.violations) fromVerify.add(key(v));
       }

@@ -30,17 +30,22 @@ export async function extractPythonDoubles(relFile: string, source: string): Pro
     if (node.type === 'assignment') {
       const left = field(node, 'left');
       const right = field(node, 'right');
-      if (left?.type === 'attribute' && left.text.endsWith('.return_value')) {
-        const parts = left.text.split('.');
+      const isReturn = left?.type === 'attribute' && left.text.endsWith('.return_value');
+      const isSideEffect = left?.type === 'attribute' && left.text.endsWith('.side_effect');
+      if (isReturn || isSideEffect) {
+        const parts = left!.text.split('.');
         const variable = parts[0];
         const method = parts[parts.length - 2];
+        const fakeArity = isSideEffect ? lambdaArity(right) : null;
         const hit = variable
           ? (varMap.get(variable) ??
             (specMap.has(variable)
               ? { target: specMap.get(variable)!.target, method: null }
               : undefined))
           : undefined;
-        if (hit && method) {
+        // A `side_effect` that is not a literal lambda says nothing about the
+        // signature, and its value is not a return value either.
+        if (hit && method && (isReturn || fakeArity !== null)) {
           doubles.push({
             framework: 'unittest.mock',
             language: 'python',
@@ -51,8 +56,9 @@ export async function extractPythonDoubles(relFile: string, source: string): Pro
             methods: [{ name: method, line: node.startPosition.row + 1 }],
             withArity: null,
             assertedArity: null,
+            ...(fakeArity !== null ? { fakeArity } : {}),
             returnTypeHint: null,
-            returnExpr: right?.text ?? null,
+            returnExpr: isReturn ? (right?.text ?? null) : null,
             confidence: 'definite',
           });
         }
@@ -114,6 +120,7 @@ export async function extractPythonDoubles(relFile: string, source: string): Pro
     if (/^(\w+\.)?patch$/.test(fnText) && first?.type === 'string') {
       const { type, method } = splitDottedTarget(unquote(first.text));
       const returnKw = keywordValue(node, 'return_value');
+      const fakeArity = lambdaArity(keywordValue(node, 'side_effect'));
       doubles.push({
         framework,
         language: 'python',
@@ -124,6 +131,7 @@ export async function extractPythonDoubles(relFile: string, source: string): Pro
         methods: method ? [{ name: method, line: node.startPosition.row + 1 }] : [],
         withArity: null,
         assertedArity: null,
+        ...(fakeArity !== null ? { fakeArity } : {}),
         returnTypeHint: null,
         returnExpr: returnKw?.text ?? null,
         confidence: 'definite',
@@ -136,6 +144,7 @@ export async function extractPythonDoubles(relFile: string, source: string): Pro
       const second = argsNode[1];
       const method = second ? unquote(second.text) : null;
       const returnKw = keywordValue(node, 'return_value');
+      const fakeArity = lambdaArity(keywordValue(node, 'side_effect'));
       if (first && (first.type === 'identifier' || first.type === 'attribute')) {
         doubles.push({
           framework,
@@ -147,6 +156,7 @@ export async function extractPythonDoubles(relFile: string, source: string): Pro
           methods: method ? [{ name: method, line: node.startPosition.row + 1 }] : [],
           withArity: null,
           assertedArity: null,
+          ...(fakeArity !== null ? { fakeArity } : {}),
           returnTypeHint: null,
           returnExpr: returnKw?.text ?? null,
           confidence: 'definite',
@@ -256,6 +266,26 @@ export async function extractPythonDoubles(relFile: string, source: string): Pro
 }
 
 /** Value of a keyword argument in a call node, if present. */
+/**
+ * Parameters a `lambda` replacement declares. A `*args` lambda, or anything
+ * that is not a literal lambda, leaves the arity undecidable. A leading
+ * `self` is dropped because `autospec=True` passes the receiver and the
+ * indexer already dropped it on the production side.
+ */
+function lambdaArity(node: SyntaxNode | null): number | null {
+  if (!node || node.type !== 'lambda') return null;
+  const params = field(node, 'parameters');
+  if (!params) return 0;
+  const declared = params.namedChildren.filter((c) => c.type !== 'comment');
+  if (
+    declared.some((c) => c.type === 'list_splat_pattern' || c.type === 'dictionary_splat_pattern')
+  )
+    return null;
+  const first = declared[0];
+  const skip = first && /^(self|cls)$/.test(first.text.split(/[:=]/)[0]?.trim() ?? '') ? 1 : 0;
+  return declared.length - skip;
+}
+
 function keywordValue(call: SyntaxNode, name: string): SyntaxNode | null {
   const args = field(call, 'arguments');
   if (!args) return null;

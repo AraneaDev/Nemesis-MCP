@@ -107,6 +107,19 @@ export interface TestDouble {
   returnExpr: string | null;
   /** The stub supplies a resolved value, so it believes the method is async. */
   resolvedReturn?: boolean;
+  /**
+   * Parameters declared by a replacement function (`mockImplementation`,
+   * `side_effect`). Unlike an asserted call, this is what the test believes
+   * the signature to be rather than what it passes.
+   */
+  fakeArity?: number | null;
+  /** Types those parameters declare, positionally; null where unannotated. */
+  fakeParamTypes?: (string | null)[];
+  /**
+   * True when the spy was pointed at the class itself, false when it was
+   * pointed at an instance. Undefined where the receiver says neither.
+   */
+  staticReceiver?: boolean;
   /** The stub is configured to return the mock itself (`willReturnSelf`). */
   returnsSelf?: boolean;
   /** `vi.spyOn(obj, 'x', 'get')`: the accessor the spy replaces, if given. */

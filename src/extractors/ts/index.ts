@@ -229,13 +229,17 @@ export async function indexTsFile(
       const accessor = n.children.find(
         (c) => !c.isNamed && (c.text === 'get' || c.text === 'set'),
       )?.text;
+      // `static` decides which object carries the member, so it decides which
+      // object a spy has to be pointed at.
+      const isStatic = n.children.some((c) => !c.isNamed && c.text === 'static');
+      const modifiers = [...(accessor ? [accessor] : []), ...(isStatic ? ['static'] : [])];
       const sym: MethodSymbol = {
         name,
         returnType: typeTextOf(n, 'return_type'),
         params,
         visibility: visibilityOf(n),
         line: n.startPosition.row + 1,
-        ...(accessor ? { modifiers: [accessor] } : {}),
+        ...(modifiers.length ? { modifiers } : {}),
       };
       // A getter describes what reading the member yields, which is what a
       // stub replaces, so it wins over the setter of the same name.
