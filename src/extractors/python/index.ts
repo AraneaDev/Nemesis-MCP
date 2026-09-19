@@ -9,7 +9,7 @@ import type {
   SymbolGraph,
   TypeSymbol,
 } from '../../core/types.js';
-import { addType, addFunction } from '../../core/symbolGraph.js';
+import { addType, addFunction, addModule } from '../../core/symbolGraph.js';
 import { parseSource } from '../../parser/loader.js';
 import { walk, field, typeTextOf } from '../walk.js';
 
@@ -101,6 +101,111 @@ export function pyVisibility(name: string): 'public' | 'protected' | 'private' {
   return 'public';
 }
 
+/** `core/webhook/manager.py` + `.formatters` -> `core.webhook.formatters`. */
+function absolutizeRelative(relFile: string, dots: number, tail: string): string {
+  const parts = relFile.replace(/\.py$/, '').split('/');
+  parts.pop(); // the module's own name
+  const base = parts.slice(0, parts.length - (dots - 1));
+  return [...base, ...(tail ? tail.split('.') : [])].filter(Boolean).join('.');
+}
+
+/**
+ * The module symbol for a Python file: what it defines at the top level, and
+ * what it binds from elsewhere.
+ *
+ * The second half is what makes this useful. Python's convention is to patch a
+ * name where it is used, so `patch("core.webhook.manager.get_db")` names an
+ * attribute that `manager.py` imports rather than defines. Indexing only
+ * definitions would report thousands of those as missing.
+ */
+function moduleSymbolFor(relFile: string, root: SyntaxNode): TypeSymbol {
+  const sym: TypeSymbol = {
+    name: relFile,
+    file: relFile,
+    kind: 'module',
+    methods: new Map(),
+    imports: new Map(),
+    unknownMembers: new Set(),
+    extends: [],
+    implements: [],
+    uses: [],
+    line: 1,
+  };
+
+  const bind = (alias: string, from: string, name: string): void => {
+    sym.imports!.set(alias, { from, name });
+    // Also unknown: a source outside the scan must never become a ghost.
+    sym.unknownMembers.add(alias);
+  };
+
+  for (const child of root.namedChildren) {
+    if (child.type === 'function_definition') {
+      const fn = fnFromNode(child);
+      if (!fn) continue;
+      // PEP 562: a module with __getattr__ answers to any name.
+      if (fn.name === '__getattr__') sym.unknownMembers.add('*');
+      sym.methods.set(fn.name, fn);
+      continue;
+    }
+
+    // `setattr(sys.modules[__name__], ...)` and `globals()[x] = y` put names in
+    // the module that nothing here mentions.
+    if (/\bsetattr\s*\(|\bglobals\s*\(\s*\)\s*\[/.test(child.text)) {
+      sym.unknownMembers.add('*');
+    }
+  }
+
+  // Imports are walked rather than read off the top level, because
+  // `try: import x except ImportError:` and `if TYPE_CHECKING:` are ordinary
+  // and both bury the statement one level down. Reading only the top level
+  // would leave those names bound by nothing, and a bound name that this does
+  // not know about becomes a ghost.
+  //
+  // An import inside a function body is not a module attribute, so this is
+  // over-inclusive. That direction costs a missed finding rather than a wrong
+  // one, which is the trade this tool makes everywhere else.
+  for (const { node: child } of walk(root)) {
+    if (child.type === 'import_statement') {
+      for (const spec of child.namedChildren) {
+        if (spec.type === 'aliased_import') {
+          const alias = field(spec, 'alias')?.text;
+          const name = field(spec, 'name')?.text ?? '';
+          if (alias) bind(alias, name, name.split('.').pop() ?? name);
+        } else if (spec.type === 'dotted_name') {
+          // `import os.path` binds `os`.
+          const head = spec.text.split('.')[0];
+          if (head) bind(head, head, head);
+        }
+      }
+      continue;
+    }
+
+    if (child.type === 'import_from_statement') {
+      const source = child.namedChildren[0];
+      if (!source) continue;
+      let from = source.text;
+      if (source.type === 'relative_import') {
+        const dots = (/^\.+/.exec(source.text)?.[0] ?? '.').length;
+        from = absolutizeRelative(relFile, dots, source.text.replace(/^\.+/, ''));
+      }
+      for (const spec of child.namedChildren.slice(1)) {
+        if (spec.type === 'wildcard_import') {
+          sym.unknownMembers.add('*');
+        } else if (spec.type === 'aliased_import') {
+          const alias = field(spec, 'alias')?.text;
+          const name = field(spec, 'name')?.text ?? '';
+          if (alias) bind(alias, from, name);
+        } else if (spec.type === 'dotted_name') {
+          bind(spec.text, from, spec.text);
+        }
+      }
+      continue;
+    }
+  }
+
+  return sym;
+}
+
 export async function indexPythonFile(
   relFile: string,
   source: string,
@@ -188,4 +293,6 @@ export async function indexPythonFile(
       }
     }
   }
+
+  addModule(graph, moduleSymbolFor(relFile, root));
 }
