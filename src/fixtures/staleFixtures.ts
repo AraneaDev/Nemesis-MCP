@@ -365,14 +365,30 @@ export async function checkFixtures(
     }
 
     const records = recordsOf(data, dto);
-    for (const rec of records) {
-      for (const [field, meta] of dto.fields) {
-        // A field that is present but holds the wrong kind of value is as
-        // stale as one that is missing, and only presence was ever checked:
-        // `"id": 1` sat happily against `id: string`.
+    // A nested object is a record of its own type, and the fields inside it
+    // drift exactly like the ones beside it. Checking only the top level meant
+    // `"address": { "town": ... }` against `city: string` passed in silence.
+    const MAX_NESTING = 4;
+    const checkRecord = (
+      rec: Record<string, unknown>,
+      owner: DtoLike,
+      prefix: string,
+      seen: Set<string>,
+    ): void => {
+      for (const [field, meta] of owner.fields) {
+        const label = `${prefix}${field}`;
         if (field in rec && meta.type && !isUntypedSide(meta.type)) {
+          const nested = nestedDto(meta.type, dtos);
+          const children = nested ? objectsIn(rec[field]) : [];
+          if (nested && children.length > 0) {
+            if (seen.size < MAX_NESTING && !seen.has(nested.name)) {
+              const deeper = new Set(seen).add(nested.name);
+              for (const child of children) checkRecord(child, nested, `${label}.`, deeper);
+            }
+            continue; // the shape was checked field by field; the kind adds nothing
+          }
           const actual = jsonKind(rec[field]);
-          const enumHit = enumValueCheck(graph, meta.type, rec[field], dto);
+          const enumHit = enumValueCheck(graph, meta.type, rec[field], owner);
           if (enumHit) {
             violations.push({
               file: rel,
@@ -381,14 +397,13 @@ export async function checkFixtures(
               confidence: 'definite',
               evidence: 'typed',
               double_type: 'stale_fixture',
-              target: `${dto.name}.${field}`,
-              message: `Fixture '${path.basename(rel)}' has '${field}' as ${JSON.stringify(rec[field])}, which is not a case of ${enumHit.enumName}.${enumHit.suggestion ? ` Did you mean ${JSON.stringify(enumHit.suggestion)}?` : ''}`,
+              target: `${owner.name}.${field}`,
+              message: `Fixture '${path.basename(rel)}' has '${label}' as ${JSON.stringify(rec[field])}, which is not a case of ${enumHit.enumName}.${enumHit.suggestion ? ` Did you mean ${JSON.stringify(enumHit.suggestion)}?` : ''}`,
             });
           } else if (
-            !enumHit &&
-            !isEnumTyped(graph, meta.type, dto) &&
+            !isEnumTyped(graph, meta.type, owner) &&
             actual &&
-            !typesCompatible(actual, meta.type, languageOf(dto.file) ?? 'typescript')
+            !typesCompatible(actual, meta.type, languageOf(owner.file) ?? 'typescript')
           ) {
             violations.push({
               file: rel,
@@ -397,28 +412,28 @@ export async function checkFixtures(
               confidence: 'definite',
               evidence: 'typed',
               double_type: 'stale_fixture',
-              target: `${dto.name}.${field}`,
-              message: `Fixture '${path.basename(rel)}' has '${field}' as ${actual} but ${dto.name} declares '${meta.type}'.`,
+              target: `${owner.name}.${field}`,
+              message: `Fixture '${path.basename(rel)}' has '${label}' as ${actual} but ${owner.name} declares '${meta.type}'.`,
             });
           }
         }
         if (meta.required && !(field in rec)) {
-          const suggestion = suggestField(rec, field, dto.fields);
+          const suggestion = suggestField(rec, field, owner.fields);
           violations.push({
             file: rel,
             line: 1,
             type: 'GHOST_METHOD',
             confidence: 'definite',
             double_type: 'stale_fixture',
-            target: `${dto.name}.${field}`,
-            message: `Fixture '${path.basename(rel)}' is missing required field '${field}' of ${dto.name}.${suggestion ? ` Did you mean '${suggestion}'?` : ''}`,
+            target: `${owner.name}.${field}`,
+            message: `Fixture '${path.basename(rel)}' is missing required field '${label}' of ${owner.name}.${suggestion ? ` Did you mean '${suggestion}'?` : ''}`,
             ...(suggestion ? { suggestion } : {}),
           });
         }
       }
       for (const key of Object.keys(rec)) {
-        if (!dto.fields.has(key)) {
-          const suggestion = suggestFieldKey(dto.fields, key);
+        if (!owner.fields.has(key)) {
+          const suggestion = suggestFieldKey(owner.fields, key);
           violations.push({
             file: rel,
             line: 1,
@@ -426,13 +441,14 @@ export async function checkFixtures(
             confidence: 'warning',
             evidence: 'untyped',
             double_type: 'stale_fixture',
-            target: `${dto.name}.${key}`,
-            message: `Fixture '${path.basename(rel)}' has field '${key}' which no longer exists on ${dto.name}.${suggestion ? ` Did you mean '${suggestion}'?` : ''}`,
+            target: `${owner.name}.${key}`,
+            message: `Fixture '${path.basename(rel)}' has field '${prefix}${key}' which no longer exists on ${owner.name}.${suggestion ? ` Did you mean '${suggestion}'?` : ''}`,
             ...(suggestion ? { suggestion } : {}),
           });
         }
       }
-    }
+    };
+    for (const rec of records) checkRecord(rec, dto, '', new Set([dto.name]));
   }
 
   return { violations, scanned, unmatched, unparsable, diagnostics };
@@ -540,6 +556,41 @@ function containerKeyNames(data: unknown): string[] {
 }
 
 /** Locate the records inside the fixture (top-level array, keyed wrapper, or single object). */
+/**
+ * The DTO a field's declared type names, when it names exactly one.
+ *
+ * Only a bare name counts, after stripping array and nullable decoration:
+ * `Address`, `Address[]`, `Address | null`. `Record<string, Address>` is an
+ * object whose keys are data, not fields, so descending into it would report
+ * every key as unknown.
+ */
+function nestedDto(type: string | null, dtos: DtoLike[]): DtoLike | null {
+  if (!type) return null;
+  const bare = type
+    .replace(/\s*\|\s*(null|undefined)\b/gi, '')
+    .replace(/^\s*(readonly\s+)?/i, '')
+    .replace(/\[\]\s*$/, '')
+    .replace(/^Array<(.+)>$/, '$1')
+    .replace(/^List\[(.+)\]$/, '$1')
+    .replace(/\?$/, '')
+    .trim();
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(bare)) return null;
+  const wanted = bare.toLowerCase();
+  const hits = dtos.filter((d) => (d.name.split(/[\\.]/).pop() ?? d.name).toLowerCase() === wanted);
+  return hits.length === 1 ? (hits[0] ?? null) : null;
+}
+
+/** Plain JSON objects held by a value, whether it is one or an array of them. */
+function objectsIn(value: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(value)) {
+    return value.filter(
+      (v): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v),
+    );
+  }
+  if (value && typeof value === 'object') return [value as Record<string, unknown>];
+  return [];
+}
+
 function recordsOf(data: unknown, dto: DtoLike): Array<Record<string, unknown>> {
   const short = (dto.name.split('\\').pop() ?? dto.name).toLowerCase();
   const out: Array<Record<string, unknown>> = [];
