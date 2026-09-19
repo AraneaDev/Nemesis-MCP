@@ -2,7 +2,7 @@
 
 namespace Experiments\Pest;
 
-final class FeatureFlag
+class FeatureFlag
 {
     public function enabled(string $name): bool
     {

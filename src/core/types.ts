@@ -55,6 +55,8 @@ export interface TypeSymbol {
   extends: string[];
   implements: string[];
   uses: string[];
+  /** Declarations modifiers on the type itself, such as `final` or `abstract`. */
+  modifiers?: string[];
   /** Type alias / DTO field map used by the fixtures checker. */
   fields?: Map<string, FieldSymbol>;
   line: number;

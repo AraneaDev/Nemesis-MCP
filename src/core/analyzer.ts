@@ -54,7 +54,13 @@ function isUntypedSide(type: string | null | undefined): boolean {
   return t === '' || /^(mixed|any|unknown)$/i.test(t);
 }
 
-function classify(d: TestDouble, graph: SymbolGraph, lines: string[]): Finding[] {
+function classify(
+  d: TestDouble,
+  graph: SymbolGraph,
+  lines: string[],
+  /** Targets already reported as undoubleable, so one class is named once. */
+  reportedFinalTargets: Set<string>,
+): Finding[] {
   const findings: Finding[] = [];
   if (!d.targetSymbol) return findings;
 
@@ -75,6 +81,30 @@ function classify(d: TestDouble, graph: SymbolGraph, lines: string[]): Finding[]
     resolveType(graph, d.targetSymbol, hint) ??
     (methodNames.length === 0 ? (resolveTarget(graph, d.targetSymbol, hint)?.type ?? null) : null);
   if (!type) return findings; // UNRESOLVED → skipped, never guessed
+
+  // A double of a final class cannot be built at all: PHPUnit refuses to
+  // generate a subclass for it, so every test using this mock dies at runtime
+  // the moment the class is sealed. Reported once, against the target.
+  const finalTargetKey = `${d.file}:${type.name}`;
+  if (
+    lang === 'php' &&
+    type.modifiers?.includes('final') &&
+    methodNames.length > 0 &&
+    !reportedFinalTargets.has(finalTargetKey) &&
+    !suppressed(lines, d.line)
+  ) {
+    reportedFinalTargets.add(finalTargetKey);
+    findings.push({
+      file: d.file,
+      line: d.line,
+      type: 'VISIBILITY_BREACH',
+      confidence: 'definite',
+      evidence: 'typed',
+      double_type: d.framework,
+      target: type.name,
+      message: `'${type.name}' is final, so it cannot be doubled; this mock fails when the test runs.`,
+    });
+  }
 
   for (const m of methodNames) {
     // A method name that is not a literal (`shouldReceive($method)` inside a
@@ -179,6 +209,37 @@ function classify(d: TestDouble, graph: SymbolGraph, lines: string[]): Finding[]
             message: `Stub passes ${arity} argument(s) but '${owner.name}::${m.name}' requires ${required}.`,
           });
         }
+      }
+    }
+
+    // --- UNDOUBLEABLE MEMBERS -----------------------------------------------
+    // Final and static members cannot be replaced by an instance double, so a
+    // stub of one is configuration that never takes effect. Both are a
+    // contract the test believes in and the runtime does not.
+    if (lang === 'php' && !suppressed(lines, m.line)) {
+      const modifiers = real.modifiers ?? [];
+      if (modifiers.includes('final')) {
+        findings.push({
+          file: d.file,
+          line: m.line,
+          type: 'VISIBILITY_BREACH',
+          confidence: 'definite',
+          evidence: 'typed',
+          double_type: d.framework,
+          target: `${owner.name}::${m.name}`,
+          message: `Method '${m.name}' is final on '${owner.name}', so a double cannot override it.`,
+        });
+      } else if (modifiers.includes('static')) {
+        findings.push({
+          file: d.file,
+          line: m.line,
+          type: 'VISIBILITY_BREACH',
+          confidence: 'warning',
+          evidence: 'heuristic',
+          double_type: d.framework,
+          target: `${owner.name}::${m.name}`,
+          message: `Method '${m.name}' is static on '${owner.name}', so an instance double does not intercept it.`,
+        });
       }
     }
 
@@ -515,9 +576,10 @@ export interface AnalyzeInput {
 
 export function analyzeDoubles(input: AnalyzeInput): Finding[] {
   const findings: Finding[] = [];
+  const reportedFinalTargets = new Set<string>();
   for (const d of input.doubles) {
     const lines = input.fileLines.get(d.file) ?? [];
-    findings.push(...classify(d, input.graph, lines));
+    findings.push(...classify(d, input.graph, lines, reportedFinalTargets));
   }
   const seen = new Set<string>();
   const deduped = findings.filter((f) => {

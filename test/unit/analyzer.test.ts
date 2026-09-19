@@ -404,3 +404,95 @@ describe('literal arguments checked against parameter types', () => {
     expect(await run(SIG, ['amount: 10', "currency: 'eur'"])).toEqual([]);
   });
 });
+
+describe('doubles that cannot exist at runtime', () => {
+  async function run(source: string, method: string) {
+    const { analyzeDoubles } = await import('../../src/core/analyzer.js');
+    const { indexPhpFile } = await import('../../src/extractors/php/index.js');
+    const graph = emptyGraph();
+    await indexPhpFile('src/G.php', source, graph);
+    return analyzeDoubles({
+      doubles: [
+        {
+          framework: 'PHPUnit_MockObject',
+          language: 'php',
+          file: 'tests/GTest.php',
+          line: 5,
+          targetSymbol: 'App\\Gateway',
+          method,
+          methods: [{ name: method, line: 6 }],
+          withArity: null,
+          assertedArity: null,
+          returnTypeHint: null,
+          returnExpr: null,
+          confidence: 'definite',
+        },
+      ],
+      graph,
+      fileLines: new Map([['tests/GTest.php', ['', '', '', '', '', '', '']]]),
+      options: { strictness: 'all' },
+    });
+  }
+
+  const FINAL_CLASS =
+    '<?php namespace App; final class Gateway { public function charge(int $c): bool {} }';
+  const MIXED =
+    '<?php namespace App; class Gateway { public function charge(int $c): bool {} final public function seal(): bool {} public static function make(): self {} }';
+
+  it('reports a final class, because no subclass can be generated for it', async () => {
+    const found = await run(FINAL_CLASS, 'charge');
+    expect(found.map((f) => f.message)).toContain(
+      "'App\\Gateway' is final, so it cannot be doubled; this mock fails when the test runs.",
+    );
+    expect(found[0]?.confidence).toBe('definite');
+  });
+
+  it('reports a final method as un-overridable', async () => {
+    const found = await run(MIXED, 'seal');
+    expect(found.map((f) => f.message)).toContain(
+      "Method 'seal' is final on 'App\\Gateway', so a double cannot override it.",
+    );
+  });
+
+  it('warns that an instance double does not intercept a static method', async () => {
+    const found = await run(MIXED, 'make');
+    const hit = found.find((f) => f.message.includes('is static'));
+    expect(hit?.confidence).toBe('warning');
+  });
+
+  it('says nothing about an ordinary method on an ordinary class', async () => {
+    expect(await run(MIXED, 'charge')).toEqual([]);
+  });
+
+  it('names a final class once even when several members are stubbed', async () => {
+    const { analyzeDoubles } = await import('../../src/core/analyzer.js');
+    const { indexPhpFile } = await import('../../src/extractors/php/index.js');
+    const graph = emptyGraph();
+    await indexPhpFile(
+      'src/G.php',
+      '<?php namespace App; final class Gateway { public function a(): bool {} public function b(): bool {} }',
+      graph,
+    );
+    const double = (method: string, line: number) => ({
+      framework: 'PHPUnit_MockObject',
+      language: 'php' as const,
+      file: 'tests/GTest.php',
+      line,
+      targetSymbol: 'App\\Gateway',
+      method,
+      methods: [{ name: method, line }],
+      withArity: null,
+      assertedArity: null,
+      returnTypeHint: null,
+      returnExpr: null,
+      confidence: 'definite' as const,
+    });
+    const found = analyzeDoubles({
+      doubles: [double('a', 5), double('b', 6)],
+      graph,
+      fileLines: new Map([['tests/GTest.php', ['', '', '', '', '', '', '']]]),
+      options: { strictness: 'all' },
+    });
+    expect(found.filter((f) => f.message.includes('is final, so it cannot'))).toHaveLength(1);
+  });
+});

@@ -101,16 +101,21 @@ describe('strictness filtering', () => {
     expect(v.every((x) => x.evidence === 'untyped')).toBe(true);
   }, 120_000);
 
-  it('all is a superset of the other two', async () => {
+  it('all contains both other modes and the heuristic findings besides', async () => {
+    // `all` is a superset rather than a sum: a heuristic warning is neither
+    // definite nor untyped, so it belongs to neither narrower mode.
     await cli(['audit', 'fixtures', '--strictness=all', '--json']);
-    const all = json().violations.length;
+    const all = json().violations as Array<{ confidence: string; evidence: string }>;
     out = [];
     await cli(['audit', 'fixtures', '--json']);
     const breaking = json().violations.length;
     out = [];
     await cli(['audit', 'fixtures', '--strictness=untyped_only', '--json']);
     const untyped = json().violations.length;
-    expect(all).toBe(breaking + untyped);
+
+    expect(all.length).toBeGreaterThanOrEqual(breaking + untyped);
+    expect(all.filter((v) => v.confidence === 'definite')).toHaveLength(breaking);
+    expect(all.filter((v) => v.evidence === 'untyped')).toHaveLength(untyped);
   }, 120_000);
 
   it('every finding carries evidence', async () => {

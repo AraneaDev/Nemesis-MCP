@@ -152,10 +152,18 @@ is listed in `unparsable_fixtures`. Neither makes the scan partial.
    since the key set is then unknowable, and when the declared type inherits
    from outside the scanned tree, since it may declare more fields than are
    visible. A member the type declares as a property is never a ghost method.
-4. **`VISIBILITY_BREACH`** — the double stubs a `private`/`protected` method
-   directly, bypassing the public interface. Python has no access control, so
-   a single leading underscore yields `warning`; only a name-mangled
-   `__member` is `definite`.
+4. **`VISIBILITY_BREACH`** — the double stubs a member it cannot legitimately
+   replace. Three cases beyond `private`/`protected`:
+   - A `final` PHP class cannot be doubled at all, because no subclass can be
+     generated for it, so every mock of it fails the moment the class is
+     sealed. Reported once per class per test file.
+   - A `final` method cannot be overridden by a double.
+   - A `static` method is not intercepted by an instance double, so stubbing
+     one is configuration that never takes effect. Reported as a `warning`,
+     since the double itself is still valid.
+
+   Python has no access control, so a single leading underscore yields
+   `warning`; only a name-mangled `__member` is `definite`.
 
 A stubbed member whose name is not a literal (`shouldReceive($method)` driven
 by a loop variable, an interpolated or templated name) identifies nothing that

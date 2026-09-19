@@ -78,13 +78,29 @@ function paramsOf(node: SyntaxNode): ParamSymbol[] {
 function methodFromNode(node: SyntaxNode): MethodSymbol | null {
   const name = field(node, 'name')?.text;
   if (!name) return null;
+  const modifiers = modifiersOf(node);
   return {
     name,
     returnType: typeTextOf(node, 'return_type'),
     params: paramsOf(node),
     visibility: visibilityOf(node),
     line: node.startPosition.row + 1,
+    ...(modifiers.length > 0 ? { modifiers } : {}),
   };
+}
+
+/**
+ * Declaration modifiers as written. `final` and `static` decide whether a
+ * member can be doubled at all: PHPUnit cannot override a final method, and a
+ * static one is not reachable through an instance mock.
+ */
+function modifiersOf(node: SyntaxNode): string[] {
+  const found: string[] = [];
+  for (const child of node.children) {
+    const text = child.text.trim();
+    if (/^(final|static|abstract|readonly)$/.test(text)) found.push(text);
+  }
+  return found;
 }
 
 function fieldsOfBody(decl: SyntaxNode): Map<string, FieldSymbol> | null {
@@ -161,6 +177,7 @@ export async function indexPhpFile(
         implements: heritageNames(node, ['class_interface_clause'], header),
         uses: [],
         line: node.startPosition.row + 1,
+        ...(modifiersOf(node).length > 0 ? { modifiers: modifiersOf(node) } : {}),
       };
       addType(graph, sym);
     } else if (node.type === 'interface_declaration') {
