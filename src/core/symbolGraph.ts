@@ -4,6 +4,7 @@
 
 import type { LanguageId, MethodSymbol, SymbolGraph, TypeSymbol } from './types.js';
 import { languageForFile } from './discovery.js';
+import { resolveModule } from './moduleResolve.js';
 
 export function emptyGraph(): SymbolGraph {
   return {
@@ -207,6 +208,24 @@ export function resolveMember(
       method: local,
       qualifiedName: `${type.name}::${method}`,
     };
+  }
+  // A module's members are what it defines and what it binds. An imported
+  // name is an attribute of the importing module, which is the thing
+  // `patch("pkg.mod.imported_name")` replaces.
+  if (type.kind === 'module' && type.imports) {
+    const binding = type.imports.get(method);
+    if (binding) {
+      const source =
+        resolveModule(graph, binding.from, type.file) ?? resolveType(graph, binding.from, hint);
+      if (source && source !== type) {
+        const hit = resolveMember(graph, source, binding.name, depth + 1, hint);
+        if (hit) return hit;
+      }
+      // Bound here, source outside the scan: it exists and nothing about it is
+      // checkable. `unknownMembers` already holds the name, so the caller
+      // reports nothing.
+      return null;
+    }
   }
   const ancestors = [...type.extends, ...type.implements, ...type.uses];
   const ownLanguage = hint?.language ?? languageForFile(type.file);

@@ -22,6 +22,7 @@ import {
   suggestMember,
 } from './symbolGraph.js';
 import { languageForFile } from './discovery.js';
+import { resolveModule } from './moduleResolve.js';
 
 const SUPPRESSION = /nemesis-ignore/i;
 
@@ -164,6 +165,7 @@ function classify(
   // unrelated class `Webhook` and report every function in it as a ghost.
   const type =
     resolveType(graph, d.targetSymbol, hint) ??
+    resolveModule(graph, d.targetSymbol, d.file) ??
     (methodNames.length === 0 ? (resolveTarget(graph, d.targetSymbol, hint)?.type ?? null) : null);
   if (!type) {
     const gone = importedButGone(d, lines, symbolsByFile, graph.exportsByFile);
@@ -240,7 +242,7 @@ function classify(
     )
       continue;
 
-    if (!real && !owner.unknownMembers.has(m.name)) {
+    if (!real && !owner.unknownMembers.has(m.name) && !owner.unknownMembers.has('*')) {
       const suggestion = suggestMember(owner, m.name);
       // A member missing from a type whose ancestry runs outside the scanned
       // tree may simply be inherited from there, so it cannot be called a
@@ -624,7 +626,9 @@ function countDouble(d: TestDouble, graph: SymbolGraph, stats: AnalyzeStats): vo
     return;
   }
   const hint = { language: d.language, fromFile: d.file };
-  if (resolveType(graph, d.targetSymbol, hint)) stats.checked += 1;
+  const reached =
+    resolveType(graph, d.targetSymbol, hint) ?? resolveModule(graph, d.targetSymbol, d.file);
+  if (reached) stats.checked += 1;
   else stats.unresolved += 1;
 }
 
