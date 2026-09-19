@@ -59,6 +59,13 @@ export interface TypeSymbol {
   modifiers?: string[];
   /** Type alias / DTO field map used by the fixtures checker. */
   fields?: Map<string, FieldSymbol>;
+  /**
+   * Module only. Names the file binds from elsewhere, and where they came
+   * from. Python's convention is to patch a name where it is used rather than
+   * where it is defined, so an imported name is a member of the importing
+   * module as much as a defined one is.
+   */
+  imports?: Map<string, { from: string; name: string }>;
   line: number;
 }
 
@@ -84,6 +91,13 @@ export interface SymbolGraph {
    * from that file alone, so nothing is reported about it.
    */
   exportsByFile: Map<string, Set<string> | null>;
+  /**
+   * One symbol per scanned production file, keyed by repo-relative path.
+   * Kept out of `types` and `typeVariants` deliberately: the short-name
+   * fallback there splits on `.`, so a module named `src/db.ts` would register
+   * under `ts` and collide with every other module in the repository.
+   */
+  modules: Map<string, TypeSymbol>;
   /** Languages whose grammars failed to load; reported in the summary. */
   skippedLanguages: LanguageId[];
 }
