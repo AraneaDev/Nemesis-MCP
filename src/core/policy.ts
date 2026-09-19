@@ -1,4 +1,4 @@
-import type { Finding, ScanDiagnostic, Strictness } from './types.js';
+import type { Finding, Strictness } from './types.js';
 
 export function passesStrictness(strictness: Strictness, finding: Finding): boolean {
   if (strictness === 'all') return true;
@@ -6,6 +6,3 @@ export function passesStrictness(strictness: Strictness, finding: Finding): bool
   return finding.evidence === 'untyped';
 }
 
-export function hasOperationalDiagnostics(diagnostics: ScanDiagnostic[] | undefined): boolean {
-  return Boolean(diagnostics?.length);
-}

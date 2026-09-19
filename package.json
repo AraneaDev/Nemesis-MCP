@@ -23,7 +23,8 @@
     "test:coverage": "vitest run --coverage",
     "test:coverage:all": "vitest run --coverage --config vitest.all.config.ts",
     "quality": "npm run lint && npm run test:coverage && npm run test:coverage:all",
-    "start": "node dist/mcp/main.js --serve"
+    "start": "node dist/mcp/main.js --serve",
+    "mutation": "stryker run stryker.config.mjs --mutate"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
@@ -34,14 +35,16 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.35.0",
+    "@stryker-mutator/core": "^10.0.0",
+    "@stryker-mutator/vitest-runner": "^10.0.0",
     "@types/node": "^24",
-    "@vitest/coverage-v8": "^5.0.1",
+    "@vitest/coverage-v8": "^4.1.11",
     "eslint": "^9.35.0",
     "markdownlint-cli2": "^0.18.1",
     "prettier": "^3.6.2",
     "tsx": "^4",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.1"
+    "vitest": "^4.1.11"
   },
   "allowScripts": {
     "esbuild@0.28.2": true
