@@ -41,7 +41,7 @@ entirely.
 | TypeScript / JS | Vitest, Jest | `vi.spyOn` / `jest.spyOn`, `vi.mocked` / `jest.mocked`, `mockReturnValue`, `mockResolvedValue`, `toHaveBeenCalledWith`, `toHaveBeenCalledTimes`, and the same setters and assertions applied directly to a typed receiver |
 | PHP | PHPUnit, Pest, Mockery | `createMock`, `createStub`, `getMockBuilder()->getMock()`, `expects()->method()`, `with()`, `willReturn*`, `Mockery::mock`, `shouldReceive`, `andReturn*`, Pest `mock()` / `spy()` |
 | Python | pytest-mock, unittest.mock | `mocker.patch`, `patch`, `patch.object`, `create_autospec`, `Mock(spec=X)`, `return_value=`, `assert_called_with` |
-| Rust | mockall | `MockFoo::new()` / `MockFoo::default()` with `expect_<method>()`, arity from `.with(...)`, return values from `return_const(...)` and `returning(|| ...)`, plus `#[automock]` and `mock! { }` declarations |
+| Rust | mockall | `MockFoo::new()` / `MockFoo::default()` with `expect_<method>()`, arity from `.with(...)`, return values from `return_const(...)` and `returning(...)`, plus `#[automock]` and `mock! { }` declarations |
 
 ## Install & Run
 
