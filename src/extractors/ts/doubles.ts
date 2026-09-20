@@ -652,6 +652,13 @@ function adoptTypedMember(
     returnExpr: null,
     assertedArity: null,
     ...(bound ? { moduleBinding: bound.kind } : {}),
+    // A default import binds an instance (or whatever the default export
+    // is), never the module's own static surface, so `x.staticMethod`
+    // through one is an instance member. `spyTargetOf` already applies this
+    // rule (line ~120); missing it here let `vi.mocked(x.staticMethod)`
+    // through a default import skip the static-versus-instance check and
+    // silently miss a definite invalid mock.
+    ...(bound?.kind === 'default' ? { staticReceiver: false } : {}),
   };
   spies.push(rec);
   return rec;
