@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.4](https://github.com/AraneaDev/Nemesis-MCP/compare/v0.2.3...v0.2.4) (2026-09-20)
+
+
+### Fixes
+
+* read interface members the parser found, not the ones semicolons imply ([2e3840c](https://github.com/AraneaDev/Nemesis-MCP/commit/2e3840c40615038e1cbe82623f7e2bfe5954418a))
+* read only the CommonJS exports written at module scope ([5865200](https://github.com/AraneaDev/Nemesis-MCP/commit/5865200cd555a586fadc44f4dfcac391bd9526da))
+* recognise the other two shapes of a global type augmentation ([10f5c99](https://github.com/AraneaDev/Nemesis-MCP/commit/10f5c991ca8bde3b182c1df3214e6d389a5f1c02))
+* resolve an indexed access type to the member it names ([a560814](https://github.com/AraneaDev/Nemesis-MCP/commit/a560814e6f544c792963880951e3811154d111dc))
+* stop reporting members of types this scan cannot read ([985a49f](https://github.com/AraneaDev/Nemesis-MCP/commit/985a49fb9ca66d291bcbc904710d6adab38e9c39))
+
 ## [0.2.3](https://github.com/AraneaDev/Nemesis-MCP/compare/v0.2.2...v0.2.3) (2026-09-20)
 
 
