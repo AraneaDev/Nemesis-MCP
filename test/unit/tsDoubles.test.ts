@@ -194,6 +194,19 @@ describe('a receiver that is a module', () => {
     expect(d?.staticReceiver).toBeUndefined();
   });
 
+  it('marks staticReceiver false for a default import through vi.mocked, same as vi.spyOn', async () => {
+    // spyTargetOf already applies this rule for `vi.spyOn(db, 'query')`
+    // through a default import. adoptTypedMember (the `vi.mocked(x.y)` path)
+    // did not, so `vi.mocked(db.staticMethod)` through a default import
+    // skipped the static-versus-instance check entirely.
+    const [d] = await doubles(
+      `import db from '../src/db.js';\nvi.mocked(db.query).mockReturnValue(1);`,
+    );
+    expect(d?.targetSymbol).toBe('../src/db.js');
+    expect(d?.method).toBe('query');
+    expect(d?.staticReceiver).toBe(false);
+  });
+
   it('prefers a local binding that shadows a module import, for vi.spyOn', async () => {
     // The module map and varTypes both come from one flat, scope-blind walk,
     // so `db` appears in both. Before modules were tracked, only varTypes was
