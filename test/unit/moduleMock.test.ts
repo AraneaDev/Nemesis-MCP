@@ -109,6 +109,32 @@ describe('a module replaced wholesale', () => {
     ).toEqual([]);
   });
 
+  // `{ getUser }` names the same key as `{ getUser: getUser }`. A shorthand
+  // property keeps its name under `name` rather than `key`, so reading only
+  // `key` left the entry nameless and discarded the whole factory: one
+  // shorthand key silenced every explicit key beside it. The same mistake had
+  // already been found and fixed in the CommonJS export reader.
+  it('reads a shorthand key', async () => {
+    const found = await run(`vi.mock('../src/api', () => ({ getUser }));`, EXPORTS);
+    expect(found.map((f) => f.message)).toEqual([
+      expect.stringContaining("supplies 'getUser', which that module does not export"),
+    ]);
+  });
+
+  it('reads the explicit keys beside a shorthand one', async () => {
+    const found = await run(
+      `vi.mock('../src/api', () => ({ saveUser, getUser: vi.fn() }));`,
+      EXPORTS,
+    );
+    expect(found.map((f) => f.message)).toEqual([
+      expect.stringContaining("supplies 'getUser', which that module does not export"),
+    ]);
+  });
+
+  it('accepts a shorthand key the module does export', async () => {
+    expect(await run(`vi.mock('../src/api', () => ({ saveUser }));`, EXPORTS)).toEqual([]);
+  });
+
   it('says nothing about a computed key', async () => {
     expect(await run(`vi.mock('../src/api', () => ({ [name]: vi.fn() }));`, EXPORTS)).toEqual([]);
   });
