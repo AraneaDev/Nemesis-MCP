@@ -606,6 +606,12 @@ function classify(
  * say about it.
  */
 function countDouble(d: TestDouble, graph: SymbolGraph, stats: AnalyzeStats): void {
+  // A factory-value double is a second view of a `vi.mock` key the
+  // module-shape double for the same call already accounts for, not a
+  // second user-written double. It still gets `classify`d for its own
+  // findings; it just does not add a second entry to the statistics.
+  if (d.fromFactory) return;
+
   if (!d.targetSymbol) {
     stats.noTarget += 1;
     return;

@@ -263,7 +263,10 @@ export async function runAudit(opts: RuntimeOptions): Promise<AuditResult> {
   return {
     summary: {
       scanned_test_files: testFiles.length,
-      doubles_inspected: doubles.length,
+      // A factory-value double is a second view of a key the module-shape
+      // double for the same `vi.mock` call already counts, not a second
+      // user-written double.
+      doubles_inspected: doubles.filter((d) => !d.fromFactory).length,
       violations_count: filtered.length,
       doubles_checked: stats.checked,
       doubles_unresolved: stats.unresolved,
