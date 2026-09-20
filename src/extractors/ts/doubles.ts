@@ -511,6 +511,9 @@ export async function extractTsDoubles(
         ...(stub.resolvedReturn ? { resolvedReturn: true } : {}),
         returnTypeHint: stub.returnTypeHint,
         returnExpr: stub.returnExpr,
+        // A second view of the key the module-shape double above already
+        // covers, not a second user-written double; kept out of the counts.
+        fromFactory: true,
         confidence: 'definite',
       });
     }
