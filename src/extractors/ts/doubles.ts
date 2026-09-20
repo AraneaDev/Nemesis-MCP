@@ -220,17 +220,29 @@ function fakeSignature(
  */
 function factoryKeys(
   factory: SyntaxNode | undefined,
+  why?: { reason: string },
 ): Array<{ name: string; line: number; value: SyntaxNode | undefined }> | null {
+  // No factory at all is an automock, not something unread: there is no
+  // configuration to fail to understand.
   if (!factory) return null;
-  if (factory.type !== 'arrow_function' && factory.type !== 'function_expression') return null;
+  if (factory.type !== 'arrow_function' && factory.type !== 'function_expression') {
+    if (why) why.reason = 'factory is not a function';
+    return null;
+  }
   let body = field(factory, 'body');
   if (body?.type === 'statement_block') {
     const ret = body.namedChildren.find((c) => c.type === 'return_statement');
     body = ret?.namedChildren[0] ?? null;
   }
   while (body?.type === 'parenthesized_expression') body = body.namedChildren[0] ?? null;
-  if (body?.type === 'await_expression') return null;
-  if (!body || body.type !== 'object') return null;
+  if (body?.type === 'await_expression') {
+    if (why) why.reason = 'factory awaits a value this cannot follow';
+    return null;
+  }
+  if (!body || body.type !== 'object') {
+    if (why) why.reason = 'factory is not an object literal';
+    return null;
+  }
   const keys: Array<{ name: string; line: number; value: SyntaxNode | undefined }> = [];
   for (const property of body.namedChildren) {
     // A spread settles what the mock KEEPS from the real module, not what it
@@ -246,8 +258,14 @@ function factoryKeys(
       property.type === 'shorthand_property_identifier'
         ? property
         : (field(property, 'key') ?? field(property, 'name'));
-    if (!key) return null;
-    if (key.type === 'computed_property_name') return null;
+    if (!key) {
+      if (why) why.reason = 'factory has a key this cannot name';
+      return null;
+    }
+    if (key.type === 'computed_property_name') {
+      if (why) why.reason = 'factory has a computed key';
+      return null;
+    }
     keys.push({
       name: key.type === 'string' ? unquote(key.text) : key.text,
       line: property.startPosition.row + 1,
@@ -332,6 +350,21 @@ function stubShapeOf(value: SyntaxNode | undefined): {
 
 export interface TsDoublesResult {
   doubles: TestDouble[];
+  /**
+   * Mock call sites this extractor recognised and then declined to read.
+   *
+   * A double dropped here reaches no bucket, so nothing in the summary's
+   * resolution columns can account for it. Three separate gaps found in one day
+   * were exactly this shape: a specifier that had to start with a dot, a spread
+   * that discarded the factory, and a shorthand key that did the same. Counting
+   * what was recognised and not read is what makes the next one visible.
+   */
+  unread: UnreadMock[];
+}
+
+export interface UnreadMock {
+  line: number;
+  reason: string;
 }
 
 export async function extractTsDoubles(
@@ -341,6 +374,7 @@ export async function extractTsDoubles(
   diagnostics?: ScanDiagnostic[],
 ): Promise<TsDoublesResult> {
   const doubles: TestDouble[] = [];
+  const unread: UnreadMock[] = [];
   const ext = path.extname(relFile);
   const grammar = ext === '.tsx' ? 'tsx' : language === 'javascript' ? 'javascript' : 'typescript';
   const parsed = await parseSource(
@@ -517,15 +551,23 @@ export async function extractTsDoubles(
     if (!call || !/^(mock|doMock)$/.test(call.property)) continue;
     if (!apiRoot(call)) continue;
     const args = call.argsNode?.namedChildren ?? [];
+    const line = node.startPosition.row + 1;
     const specifierNode = args[0];
-    if (!specifierNode || specifierNode.type !== 'string') continue;
+    if (!specifierNode || specifierNode.type !== 'string') {
+      unread.push({ line, reason: 'specifier is not a string literal' });
+      continue;
+    }
     const specifier = unquote(specifierNode.text);
     // Every specifier is kept, relative or not. `@/services/api` may be a
     // tsconfig path alias and `react` may be a package, and telling them apart
     // needs the graph and the alias table, which live in the analyzer. Guessing
     // here duplicated resolution that had already drifted out of step twice.
-    const keys = factoryKeys(args[1]);
-    if (!keys) continue;
+    const why = { reason: '' };
+    const keys = factoryKeys(args[1], why);
+    if (!keys) {
+      if (why.reason) unread.push({ line, reason: why.reason });
+      continue;
+    }
     doubles.push({
       framework: `${apiRoot(call)}.mock`,
       language,
@@ -599,7 +641,7 @@ export async function extractTsDoubles(
     });
   }
 
-  return { doubles };
+  return { doubles, unread };
 }
 
 /**

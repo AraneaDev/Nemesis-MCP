@@ -261,6 +261,19 @@ export interface AuditSummary {
   doubles_unresolved?: number;
   doubles_unknowable?: number;
   doubles_untargeted?: number;
+  /**
+   * Mock call sites an extractor recognised and then declined to read.
+   *
+   * These reach no bucket: they are not unresolved, not unknowable, not
+   * untargeted, because they never became doubles at all. Three detection gaps
+   * found in a single day were all this shape, and every one of them was
+   * invisible in a summary whose columns added up perfectly. A nonzero count
+   * means the scan met syntax it does not understand, which is a fact about
+   * this tool rather than about the repository, so it never fails a run.
+   */
+  mocks_unread?: number;
+  /** How many unread sites fell to each reason, for locating the gap. */
+  mocks_unread_reasons?: Record<string, number>;
   skipped_languages?: LanguageId[];
   diagnostics?: ScanDiagnostic[];
   partial?: boolean;

@@ -148,9 +148,14 @@ async function extractDoubles(
   diagnostics: ScanDiagnostic[],
   maxFileBytes: number,
   budget: { bytes: number; deadline: number },
-): Promise<{ doubles: TestDouble[]; fileLines: Map<string, string[]> }> {
+): Promise<{
+  doubles: TestDouble[];
+  fileLines: Map<string, string[]>;
+  unread: Array<{ file: string; line: number; reason: string }>;
+}> {
   const doubles: TestDouble[] = [];
   const fileLines = new Map<string, string[]>();
+  const unread: Array<{ file: string; line: number; reason: string }> = [];
   for (const rel of files) {
     const source = await readIfPossible(rel, rootDir, diagnostics, maxFileBytes, budget);
     if (source === null) continue;
@@ -161,6 +166,7 @@ async function extractDoubles(
       if (lang === 'typescript' || lang === 'javascript') {
         const r = await extractTsDoubles(rel, source, lang, diagnostics);
         doubles.push(...r.doubles);
+        for (const u of r.unread) unread.push({ file: rel, ...u });
       } else if (lang === 'php') {
         doubles.push(...(await extractPhpDoubles(rel, source, diagnostics)));
       } else if (lang === 'python') {
@@ -179,7 +185,7 @@ async function extractDoubles(
       });
     }
   }
-  return { doubles, fileLines };
+  return { doubles, fileLines, unread };
 }
 
 /** Run a full audit: discovery → indexing → extraction → analysis. */
@@ -237,7 +243,7 @@ export async function runAudit(opts: RuntimeOptions): Promise<AuditResult> {
   graph.tsPathAliases = await loadTsPathAliases(rootDir, opts.extraExcludes ?? []);
   await indexProduction(productionFiles, rootDir, graph, diagnostics, maxFileBytes, budget);
 
-  const { doubles, fileLines } = await extractDoubles(
+  const { doubles, fileLines, unread } = await extractDoubles(
     testFiles,
     rootDir,
     diagnostics,
@@ -268,11 +274,21 @@ export async function runAudit(opts: RuntimeOptions): Promise<AuditResult> {
       doubles_unresolved: stats.unresolved,
       doubles_unknowable: stats.unknowable,
       doubles_untargeted: stats.noTarget,
+      ...(unread.length
+        ? { mocks_unread: unread.length, mocks_unread_reasons: tally(unread) }
+        : {}),
       ...(graph.skippedLanguages.length ? { skipped_languages: graph.skippedLanguages } : {}),
       ...(diagnostics.length ? { diagnostics, partial: true } : {}),
     },
     violations: filtered,
   };
+}
+
+/** Group unread mock sites by reason, so a nonzero count says which syntax it was. */
+function tally(unread: Array<{ reason: string }>): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const u of unread) counts[u.reason] = (counts[u.reason] ?? 0) + 1;
+  return counts;
 }
 
 /** List doubles targeting a specific symbol, with validity flags. */
