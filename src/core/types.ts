@@ -204,12 +204,15 @@ export interface TestDouble {
   /**
    * True for the per-key double a `vi.mock` factory value produces, as
    * distinct from the module-shape double the same `vi.mock` call also
-   * produces. Both report their findings independently, but a factory-value
-   * double is a second view of a key the module-shape double already
-   * accounts for, not a second user-written double, so it must not be
-   * counted in the statistics. (It is also, separately and not yet fixed,
-   * capable of reporting the same missing key twice; this field is where
-   * that fix would start.)
+   * produces. A factory-value double is a second view of a key the
+   * module-shape double already accounts for, not a second user-written
+   * double, so it must not be counted in the statistics.
+   *
+   * It is also why the same missing key was once reported twice, once against
+   * the specifier and once against the resolved file. The member path in the
+   * analyzer now leaves the existence question to the module-shape double and
+   * keeps only the checks a factory value earns on its own: arity, parameter
+   * types and return type.
    */
   fromFactory?: true;
   confidence: Confidence;
@@ -273,7 +276,14 @@ export interface AnalyzeOptions {
  * the corpus it read 4,772 when 47 had been compared against anything.
  */
 export interface AnalyzeStats {
-  /** Target resolved and at least one member was looked up. */
+  /**
+   * The analyzer had something to say about this double. That means its target
+   * resolved, or the name was one the scan watched leave a module it read.
+   *
+   * Not "a member was looked up": a double that resolves while naming no
+   * members counts too. Nothing was compared, but the contract was in hand and
+   * the double asked nothing of it.
+   */
   checked: number;
   /** Target named something this scan could not find. */
   unresolved: number;
