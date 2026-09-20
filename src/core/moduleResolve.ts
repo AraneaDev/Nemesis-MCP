@@ -51,7 +51,7 @@ function applicableAliasRules(rules: TsPathAlias[], fromDir: string): TsPathAlia
   return applicable;
 }
 
-/** The wildcard portion of `target` under `rule`, or null when it does not match. */
+/** The wildcard portion of `target` under a wildcard `rule`, or null when it does not match. */
 function matchAliasPattern(rule: TsPathAlias, target: string): string | null {
   if (!target.startsWith(rule.prefix) || !target.endsWith(rule.suffix)) return null;
   if (target.length < rule.prefix.length + rule.suffix.length) return null;
@@ -59,11 +59,41 @@ function matchAliasPattern(rule: TsPathAlias, target: string): string | null {
 }
 
 /**
+ * The one rule `target` selects among `rules`, following TypeScript's own
+ * `paths` precedence: an exact key (no `*`) matches only when `target`
+ * equals it outright, and wins over every wildcard key when it does.
+ * Otherwise the matching wildcard key with the longest prefix before `*`
+ * wins. Only one rule is ever selected — TypeScript never falls through to
+ * a less specific pattern when the winning one fails to resolve, and
+ * neither does this scan.
+ */
+function selectAliasRule(
+  rules: TsPathAlias[],
+  target: string,
+): { rule: TsPathAlias; middle: string } | null {
+  const exactRule = rules.find((rule) => rule.exact && rule.prefix === target);
+  if (exactRule) return { rule: exactRule, middle: '' };
+
+  let best: { rule: TsPathAlias; middle: string } | null = null;
+  for (const rule of rules) {
+    if (rule.exact) continue;
+    const middle = matchAliasPattern(rule, target);
+    if (middle === null) continue;
+    if (!best || rule.prefix.length > best.rule.prefix.length) {
+      best = { rule, middle };
+    }
+  }
+  return best;
+}
+
+/**
  * Resolve `target` through the repository's `tsconfig.json` `paths` aliases,
  * or null. Only the alias rules whose declaring directory encloses `fromFile`
  * apply, and among those the one declared in the deepest (most specific)
  * directory wins — a nested tsconfig's aliases apply to files under it, not
- * to the whole repository.
+ * to the whole repository. Within that directory, `selectAliasRule` then
+ * picks the single most specific pattern; if that one rule's target is not a
+ * scanned file, resolution fails rather than trying a less specific rule.
  */
 function resolveAlias(graph: SymbolGraph, target: string, fromFile: string): TypeSymbol | null {
   const rules = graph.tsPathAliases;
@@ -71,15 +101,15 @@ function resolveAlias(graph: SymbolGraph, target: string, fromFile: string): Typ
   const fromDir = path.posix.dirname(fromFile.split(path.sep).join('/'));
   const applicable = applicableAliasRules(rules, fromDir);
 
-  for (const rule of applicable) {
-    if (rule.targets.length !== 1) continue; // several targets: silence beats a guess
-    const middle = matchAliasPattern(rule, target);
-    if (middle === null) continue;
-    const resolvedPath = path.posix.normalize(rule.targets[0]!.replace('*', middle));
-    for (const candidate of extensionCandidates(resolvedPath)) {
-      const hit = graph.modules.get(candidate);
-      if (hit) return hit;
-    }
+  const selected = selectAliasRule(applicable, target);
+  if (!selected) return null;
+  const { rule, middle } = selected;
+  if (rule.targets.length !== 1) return null; // several targets: silence beats a guess
+
+  const resolvedPath = path.posix.normalize(rule.targets[0]!.replace('*', middle));
+  for (const candidate of extensionCandidates(resolvedPath)) {
+    const hit = graph.modules.get(candidate);
+    if (hit) return hit;
   }
   return null;
 }
@@ -96,7 +126,7 @@ export function isTsAliasSpecifier(graph: SymbolGraph, target: string, fromFile:
   if (!rules || rules.length === 0) return false;
   const fromDir = path.posix.dirname(fromFile.split(path.sep).join('/'));
   const applicable = applicableAliasRules(rules, fromDir);
-  return applicable.some((rule) => matchAliasPattern(rule, target) !== null);
+  return selectAliasRule(applicable, target) !== null;
 }
 
 /**
@@ -367,9 +397,10 @@ export async function loadTsPathAliases(
     for (const [key, targets] of Object.entries(merged.paths)) {
       if ((key.match(/\*/g) ?? []).length > 1) continue; // not a valid TS pattern
       const starIdx = key.indexOf('*');
-      const prefix = starIdx === -1 ? key : key.slice(0, starIdx);
-      const suffix = starIdx === -1 ? '' : key.slice(starIdx + 1);
-      rules.push({ configDir, prefix, suffix, targets });
+      const exact = starIdx === -1;
+      const prefix = exact ? key : key.slice(0, starIdx);
+      const suffix = exact ? '' : key.slice(starIdx + 1);
+      rules.push({ configDir, prefix, suffix, exact, targets });
     }
   }
 

@@ -76,7 +76,7 @@ describe('TypeScript path aliases', () => {
   function alias(
     rule: Partial<TsPathAlias> & Pick<TsPathAlias, 'prefix' | 'targets'>,
   ): TsPathAlias {
-    return { configDir: '.', suffix: '', ...rule };
+    return { configDir: '.', suffix: '', exact: false, ...rule };
   }
 
   it('resolves "@/services/x" through "@/*": ["./src/*"] to src/services/x.ts', () => {
@@ -110,5 +110,45 @@ describe('TypeScript path aliases', () => {
     const g = graphWith('src/services/admin.service.ts');
     g.tsPathAliases = [alias({ prefix: '@/', targets: ['src/*'] })];
     expect(resolveModule(g, '@/services/deleted-service', 'tests/a.test.ts')).toBeNull();
+  });
+
+  it('prefers an exact alias over a wildcard one that also matches', () => {
+    // "@app/special": ["src/special-handler"] alongside "@app/*": ["src/*"].
+    // TypeScript matches the exact key first; falling through to the
+    // wildcard rule (declaration order, previously) would have resolved
+    // this to src/special.ts instead of src/special-handler.ts.
+    const g = graphWith('src/special.ts', 'src/special-handler.ts');
+    g.tsPathAliases = [
+      alias({ prefix: '@app/', targets: ['src/*'] }),
+      alias({ prefix: '@app/special', exact: true, targets: ['src/special-handler'] }),
+    ];
+    expect(resolveModule(g, '@app/special', 'tests/a.test.ts')?.file).toBe(
+      'src/special-handler.ts',
+    );
+  });
+
+  it('does not fall through to a less specific wildcard when the exact match does not resolve', () => {
+    const g = graphWith('src/special.ts');
+    g.tsPathAliases = [
+      alias({ prefix: '@app/*', targets: ['src/*'] }),
+      alias({ prefix: '@app/special', exact: true, targets: ['src/nowhere'] }),
+    ];
+    // The exact rule wins selection but its own target is not scanned, so
+    // this must stay null rather than falling back to "@app/*".
+    expect(resolveModule(g, '@app/special', 'tests/a.test.ts')).toBeNull();
+  });
+
+  it('picks the wildcard rule with the longest prefix among several that match', () => {
+    // Both "@app/*" and "@app/sub/*" match "@app/sub/thing"; TypeScript
+    // picks the more specific one, "@app/sub/*". Deliberately points the
+    // less specific rule somewhere this target does NOT live, so a wrong
+    // selection (or a fall-through to it) would resolve to nothing instead
+    // of quietly landing on the right file for the wrong reason.
+    const g = graphWith('src/sub/thing.ts');
+    g.tsPathAliases = [
+      alias({ prefix: '@app/', targets: ['other/*'] }),
+      alias({ prefix: '@app/sub/', targets: ['src/sub/*'] }),
+    ];
+    expect(resolveModule(g, '@app/sub/thing', 'tests/a.test.ts')?.file).toBe('src/sub/thing.ts');
   });
 });
