@@ -78,6 +78,36 @@ describe('the module symbol for a Python file', () => {
     expect(m.unknownMembers.has('*')).toBe(true);
   });
 
+  it('gives up on a module that assigns through globals()', async () => {
+    expect((await moduleOf('globals()["x"] = 1\n')).unknownMembers.has('*')).toBe(true);
+    expect((await moduleOf('setattr(globals(), "x", 1)\n')).unknownMembers.has('*')).toBe(true);
+  });
+
+  it('still gives up when the mutation is written inside a top-level helper', async () => {
+    // The check reads the whole file on purpose: this is the ordinary way it
+    // is written, and a statement-by-statement test never saw it.
+    const m = await moduleOf(
+      'import sys\n\ndef install():\n    setattr(sys.modules[__name__], "x", 1)\n',
+    );
+    expect(m.unknownMembers.has('*')).toBe(true);
+  });
+
+  it('does not give up on the module when setattr targets something else', async () => {
+    // `setattr(SomeClass, ...)` mutates the class, not the module. Reading any
+    // `setattr(` at all as a module mutation silenced every question about the
+    // file, including questions the module could have answered.
+    const m = await moduleOf(
+      'class Repo:\n    pass\n\nsetattr(Repo, "cache", {})\n\ndef run():\n    pass\n',
+    );
+    expect(m.unknownMembers.has('*')).toBe(false);
+    expect(m.methods.has('run')).toBe(true);
+  });
+
+  it('does not give up on the module for a setattr on an instance', async () => {
+    const m = await moduleOf('obj = Thing()\nsetattr(obj, "x", 1)\n\ndef run():\n    pass\n');
+    expect(m.unknownMembers.has('*')).toBe(false);
+  });
+
   it('gives up on a module with __getattr__', async () => {
     const m = await moduleOf('def __getattr__(name):\n    return 1\n');
     expect(m.unknownMembers.has('*')).toBe(true);
