@@ -150,6 +150,17 @@ export interface TestDouble {
   returnsSelf?: boolean;
   /** `vi.spyOn(obj, 'x', 'get')`: the accessor the spy replaces, if given. */
   accessType?: string;
+  /**
+   * True for the per-key double a `vi.mock` factory value produces, as
+   * distinct from the module-shape double the same `vi.mock` call also
+   * produces. Both report their findings independently, but a factory-value
+   * double is a second view of a key the module-shape double already
+   * accounts for, not a second user-written double, so it must not be
+   * counted in the statistics. (It is also, separately and not yet fixed,
+   * capable of reporting the same missing key twice; this field is where
+   * that fix would start.)
+   */
+  fromFactory?: true;
   confidence: Confidence;
 }
 
