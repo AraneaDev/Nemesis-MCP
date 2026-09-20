@@ -141,6 +141,35 @@ describe('the module symbol for a Python file', () => {
     expect(m.unknownMembers.has('event_bus')).toBe(true);
   });
 
+  // `patch("pkg.mod.event_bus.publish")` is the ordinary way to reach an object
+  // a module holds. Knowing only that the name exists stops at the name; the
+  // class it was built from is what makes `publish` checkable.
+  it('records the class a top-level assignment instantiates', async () => {
+    const m = await moduleOf('event_bus = EventBus()\n');
+    expect(m.fields?.get('event_bus')?.type).toBe('EventBus');
+  });
+
+  it('records a dotted constructor under its last segment', async () => {
+    const m = await moduleOf('bus = core.tasks.EventBus()\n');
+    expect(m.fields?.get('bus')?.type).toBe('core.tasks.EventBus');
+  });
+
+  it('records nothing for an assignment that is not a construction', async () => {
+    const m = await moduleOf('total = 1 + 2\nname = "x"\nitems = []\n');
+    for (const n of ['total', 'name', 'items']) {
+      expect(m.fields?.get(n)).toBeUndefined();
+      expect(m.unknownMembers.has(n)).toBe(true);
+    }
+  });
+
+  it('records nothing for a call that is not a constructor', async () => {
+    // A lower-case callee is a function call by convention, and its return type
+    // is not the callee's name.
+    const m = await moduleOf('conn = get_connection()\n');
+    expect(m.fields?.get('conn')).toBeUndefined();
+    expect(m.unknownMembers.has('conn')).toBe(true);
+  });
+
   it('binds an annotated top-level assignment', async () => {
     const m = await moduleOf('x: int = 1\n');
     expect(m.unknownMembers.has('x')).toBe(true);

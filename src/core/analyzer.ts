@@ -174,6 +174,68 @@ function opaqueDefaultExport(mod: TypeSymbol): TypeSymbol {
  * `require`) genuinely does bind the module, so that case resolves exactly
  * as before.
  */
+/**
+ * A module attribute split off the end of a dotted target: the module it
+ * belongs to, the attribute's name, and whether the module binds it at all.
+ *
+ * `patch("core.jobs.event_bus")` names the `event_bus` NAME bound in
+ * `core/jobs.py`, not a module called `event_bus`. Resolving only submodules
+ * left this idiom, the ordinary way Python tests reach into a module, entirely
+ * unchecked.
+ */
+function moduleAttribute(
+  graph: SymbolGraph,
+  target: string,
+  fromFile: string,
+): { mod: TypeSymbol; attr: string; bound: boolean } | null {
+  const idx = target.lastIndexOf('.');
+  if (idx <= 0) return null;
+  const mod = resolveModule(graph, target.slice(0, idx), fromFile);
+  if (!mod || mod.kind !== 'module') return null;
+  const attr = target.slice(idx + 1);
+  const bound =
+    mod.methods.has(attr) ||
+    mod.unknownMembers.has(attr) ||
+    mod.unknownMembers.has('*') ||
+    Boolean(mod.fields?.has(attr)) ||
+    Boolean(mod.imports?.has(attr));
+  return { mod, attr, bound };
+}
+
+/**
+ * The type of the object a module holds under `attr`, when this scan can see
+ * what it was built from.
+ *
+ * Two routes: the module constructed it itself (`event_bus = EventBus()`), or
+ * it imported the name, in which case the search continues in the module it
+ * came from. An attribute bound from outside the scanned tree has no type to
+ * find, which is the answer rather than a failure.
+ */
+function moduleAttributeType(
+  graph: SymbolGraph,
+  target: string,
+  fromFile: string,
+  hint: ResolveHint,
+  depth = 0,
+): TypeSymbol | null {
+  if (depth > 4) return null;
+  const found = moduleAttribute(graph, target, fromFile);
+  if (!found) return null;
+  const { mod, attr } = found;
+
+  const constructed = mod.fields?.get(attr)?.type;
+  if (constructed) {
+    const type = resolveType(graph, constructed, { ...hint, fromFile: mod.file });
+    if (type) return type;
+  }
+
+  const binding = mod.imports?.get(attr);
+  if (binding) {
+    return moduleAttributeType(graph, `${binding.from}.${binding.name}`, mod.file, hint, depth + 1);
+  }
+  return null;
+}
+
 function resolveDoubleType(
   d: TestDouble,
   graph: SymbolGraph,
@@ -183,7 +245,10 @@ function resolveDoubleType(
   if (direct) return direct;
 
   if (d.moduleBinding !== 'default') {
-    return resolveModule(graph, d.targetSymbol!, d.file);
+    return (
+      resolveModule(graph, d.targetSymbol!, d.file) ??
+      moduleAttributeType(graph, d.targetSymbol!, d.file, hint)
+    );
   }
 
   const mod = resolveModule(graph, d.targetSymbol!, d.file);
@@ -797,6 +862,19 @@ function countDouble(
     stats.unknowable += 1;
     return;
   }
+
+  // A module attribute this scan can see the module bind, but whose own type it
+  // cannot reach: `patch("core.jobs.asyncio.sleep")` names the stdlib `asyncio`
+  // bound in `core/jobs.py`. The target was found and there is no contract
+  // behind it, which is a different answer from having failed to find it. A
+  // name the module does not bind at all stays unresolved, because that is a
+  // target that really has gone missing.
+  const attribute = moduleAttribute(graph, d.targetSymbol, d.file);
+  if (attribute?.bound) {
+    stats.unknowable += 1;
+    return;
+  }
+
   stats.unresolved += 1;
 }
 

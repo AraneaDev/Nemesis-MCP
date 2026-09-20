@@ -128,6 +128,28 @@ function identifiersInTarget(node: SyntaxNode): string[] {
 }
 
 /**
+ * The class an assignment's right-hand side constructs, or null.
+ *
+ * Python has no `new`, so a construction and a function call are the same
+ * syntax and only the naming convention tells them apart: PEP 8 gives classes
+ * CapWords and functions lower_case. `get_connection()` therefore says nothing
+ * about the type of what it returns, while `EventBus()` does.
+ *
+ * The callee is kept as written, dotted prefix and all, so the caller can try
+ * to resolve it either way.
+ */
+function constructorOf(assign: SyntaxNode): string | null {
+  const right = field(assign, 'right');
+  if (right?.type !== 'call') return null;
+  const callee = field(right, 'function');
+  if (!callee) return null;
+  if (callee.type !== 'identifier' && callee.type !== 'attribute') return null;
+  const text = callee.text;
+  const last = text.split('.').pop() ?? text;
+  return /^[A-Z]/.test(last) ? text : null;
+}
+
+/**
  * A module rewriting its own namespace at import time: `setattr` against this
  * module object, or an assignment through `globals()`.
  *
@@ -280,6 +302,19 @@ function moduleSymbolFor(relFile: string, root: SyntaxNode): TypeSymbol {
         const left = field(assign, 'left');
         if (left) {
           for (const name of identifiersInTarget(left)) sym.unknownMembers.add(name);
+        }
+        // `event_bus = EventBus()` is the ordinary way a module holds an
+        // object, and `patch("pkg.mod.event_bus.publish")` is the ordinary way
+        // a test reaches into it. Knowing only that the name exists stops at
+        // the name; the class it was built from is what makes the member
+        // checkable.
+        const constructed = constructorOf(assign);
+        if (left?.type === 'identifier' && constructed) {
+          (sym.fields ??= new Map()).set(left.text, {
+            name: left.text,
+            type: constructed,
+            required: true,
+          });
         }
       }
     }
