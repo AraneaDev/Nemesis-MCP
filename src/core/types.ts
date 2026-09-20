@@ -253,6 +253,17 @@ export interface ScanDiagnostic {
   fatal: boolean;
 }
 
+/**
+ * A mock call site an extractor recognised and then declined to read.
+ *
+ * Distinct from a diagnostic: nothing went wrong with the file. The syntax is
+ * valid and the extractor simply does not understand this shape of it.
+ */
+export interface UnreadMock {
+  line: number;
+  reason: string;
+}
+
 export interface AuditSummary {
   scanned_test_files: number;
   doubles_inspected: number;

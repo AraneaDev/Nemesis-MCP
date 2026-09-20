@@ -15,6 +15,7 @@ import type {
   TestDouble,
   TypeSymbol,
   ScanDiagnostic,
+  UnreadMock,
 } from './types.js';
 import { discoverFiles, filterByLanguages } from './discovery.js';
 import { emptyGraph, normalizeSymbolName, resolveMember, resolveType } from './symbolGraph.js';
@@ -170,7 +171,9 @@ async function extractDoubles(
       } else if (lang === 'php') {
         doubles.push(...(await extractPhpDoubles(rel, source, diagnostics)));
       } else if (lang === 'python') {
-        doubles.push(...(await extractPythonDoubles(rel, source, diagnostics)));
+        const pyUnread: UnreadMock[] = [];
+        doubles.push(...(await extractPythonDoubles(rel, source, diagnostics, pyUnread)));
+        for (const u of pyUnread) unread.push({ file: rel, ...u });
       } else if (lang === 'rust') {
         doubles.push(...(await extractRustDoubles(rel, source, diagnostics)));
       }
