@@ -233,7 +233,10 @@ function factoryKeys(
   if (!body || body.type !== 'object') return null;
   const keys: Array<{ name: string; line: number; value: SyntaxNode | undefined }> = [];
   for (const property of body.namedChildren) {
-    if (property.type === 'spread_element') return null; // the rest came from elsewhere
+    // A spread settles what the mock KEEPS from the real module, not what it
+    // adds. A key stated beside one is still an extra key, and the module
+    // either exports that name or nothing can reach it.
+    if (property.type === 'spread_element') continue;
     if (property.type === 'comment') continue;
     const key = field(property, 'key');
     if (!key) return null;
@@ -504,7 +507,10 @@ export async function extractTsDoubles(
     const specifierNode = args[0];
     if (!specifierNode || specifierNode.type !== 'string') continue;
     const specifier = unquote(specifierNode.text);
-    if (!specifier.startsWith('.')) continue;
+    // Every specifier is kept, relative or not. `@/services/api` may be a
+    // tsconfig path alias and `react` may be a package, and telling them apart
+    // needs the graph and the alias table, which live in the analyzer. Guessing
+    // here duplicated resolution that had already drifted out of step twice.
     const keys = factoryKeys(args[1]);
     if (!keys) continue;
     doubles.push({

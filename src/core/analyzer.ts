@@ -322,7 +322,7 @@ function classify(
   if (!d.targetSymbol) return findings;
 
   if (d.moduleSpecifier) {
-    return moduleShapeFindings(d, lines, graph.exportsByFile);
+    return moduleShapeFindings(d, lines, graph);
   }
 
   const lang = d.language;
@@ -835,14 +835,14 @@ function countDouble(
   // `moduleShapeFindings`, and this has to agree with it: a summary that
   // contradicts the violations printed beside it is worse than no summary.
   if (d.moduleSpecifier) {
-    if (!d.moduleSpecifier.startsWith('.')) {
-      // Not relative, so a package by construction. Nothing this scan owns.
+    const files = moduleSpecifierFiles(d, graph);
+    if (files.length === 0) {
+      // Neither relative nor a configured alias, so a package by construction.
+      // Nothing this scan owns.
       stats.unknowable += 1;
       return;
     }
-    const scanned = specifierCandidates(d.file, d.moduleSpecifier).some((candidate) =>
-      graph.exportsByFile.has(candidate),
-    );
+    const scanned = files.some((candidate) => graph.exportsByFile.has(candidate));
     if (scanned) stats.checked += 1;
     else stats.unresolved += 1;
     return;
@@ -1847,14 +1847,27 @@ function manualMockFindings(graph: SymbolGraph): Finding[] {
  * `default` always passes: a module with no default export is a compile error
  * long before this could say anything useful about it.
  */
-function moduleShapeFindings(
-  d: TestDouble,
-  lines: string[],
-  exportsByFile: Map<string, Set<string> | null>,
-): Finding[] {
+/**
+ * The repository files a `vi.mock` specifier could name.
+ *
+ * A relative specifier is spelled out directly. One that is not relative may
+ * still be a tsconfig path alias, `@/services/api`, which only the alias table
+ * can settle; requiring a leading dot dropped those mocks entirely, and in one
+ * repository that was four of the nine places a dead key was configured. A
+ * genuine package resolves to nothing here and is reported on by nobody.
+ */
+function moduleSpecifierFiles(d: TestDouble, graph: SymbolGraph): string[] {
+  const specifier = d.moduleSpecifier ?? '';
+  if (specifier.startsWith('.')) return specifierCandidates(d.file, specifier);
+  const aliased = resolveModule(graph, specifier, d.file);
+  return aliased ? [aliased.file] : [];
+}
+
+function moduleShapeFindings(d: TestDouble, lines: string[], graph: SymbolGraph): Finding[] {
+  const exportsByFile = graph.exportsByFile;
   const findings: Finding[] = [];
   const specifier = d.moduleSpecifier ?? '';
-  for (const candidate of specifierCandidates(d.file, specifier)) {
+  for (const candidate of moduleSpecifierFiles(d, graph)) {
     if (!exportsByFile.has(candidate)) continue;
     const exports = exportsByFile.get(candidate);
     if (!exports) return findings;
