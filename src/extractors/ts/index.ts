@@ -10,7 +10,7 @@ import type {
   SymbolGraph,
   TypeSymbol,
 } from '../../core/types.js';
-import { addType, addFunction } from '../../core/symbolGraph.js';
+import { addType, addFunction, addModule } from '../../core/symbolGraph.js';
 import { parseSource } from '../../parser/loader.js';
 import { walk, field, typeTextOf, visibilityOf } from '../walk.js';
 
@@ -172,6 +172,244 @@ function recordExports(
   // A file that turned out to export nothing says nothing: it is either not a
   // module or exports in a way this does not read, and neither is evidence.
   graph.exportsByFile.set(relFile, complete && names.size > 0 ? names : null);
+}
+
+/**
+ * The module symbol for a TypeScript or JavaScript file: what it exports with
+ * signatures, and what it imports.
+ *
+ * `recordExports` already walks these nodes for names and keeps doing so
+ * unchanged: checks 22, 28 and 29 read `exportsByFile`. This builds the
+ * richer symbol beside it. A name is a module member if it is reachable,
+ * however it got there; when it cannot be described with a signature it
+ * still goes in `unknownMembers` so it is never mistaken for a ghost.
+ */
+function moduleSymbolFor(
+  relFile: string,
+  root: import('web-tree-sitter').Node,
+  graph: SymbolGraph,
+): TypeSymbol {
+  const sym: TypeSymbol = {
+    name: relFile,
+    file: relFile,
+    kind: 'module',
+    methods: new Map(),
+    imports: new Map(),
+    unknownMembers: new Set(),
+    extends: [],
+    implements: [],
+    uses: [],
+    line: 1,
+  };
+
+  // An export list this scan could not take whole means nothing is reportable.
+  if (graph.exportsByFile.get(relFile) === null) sym.unknownMembers.add('*');
+
+  // Every top-level function or function-valued const this file declares,
+  // exported or not. CommonJS declares them first and lists them afterwards
+  // in `module.exports`, so the lookup has to be able to look backwards.
+  const declared = new Map<string, MethodSymbol>();
+
+  const fnFromValue = (
+    name: string,
+    value: import('web-tree-sitter').Node,
+    line: number,
+  ): MethodSymbol | null => {
+    if (value.type !== 'arrow_function' && value.type !== 'function_expression') return null;
+    const params: ParamSymbol[] = [];
+    const paramList = field(value, 'parameters');
+    if (paramList) {
+      for (const p of paramList.namedChildren) {
+        const param = paramFromTs(p);
+        if (param) params.push(param);
+      }
+    }
+    return {
+      name,
+      returnType: typeTextOf(value, 'return_type'),
+      params,
+      visibility: 'public',
+      line,
+    };
+  };
+
+  const takeFunction = (node: import('web-tree-sitter').Node, exported: boolean): void => {
+    const fn = methodFromFunction(node);
+    if (!fn) return;
+    declared.set(fn.name, fn);
+    if (exported) sym.methods.set(fn.name, fn);
+  };
+
+  const takeArrowConst = (declarator: import('web-tree-sitter').Node, exported: boolean): void => {
+    const name = field(declarator, 'name');
+    const value = field(declarator, 'value');
+    if (name?.type !== 'identifier') return;
+    const fn = value ? fnFromValue(name.text, value, declarator.startPosition.row + 1) : null;
+    if (fn) {
+      declared.set(fn.name, fn);
+      if (exported) sym.methods.set(fn.name, fn);
+      return;
+    }
+    // A non-function const, e.g. `export const sounds = new SoundManager()` or
+    // `export const MAX = 5`: the name is reachable, but nothing here can
+    // describe it with a signature.
+    if (exported) sym.unknownMembers.add(name.text);
+  };
+
+  // An exported class, interface, type alias or enum: the NAME is a member,
+  // not a callable one, so it belongs in `unknownMembers` rather than
+  // `methods`.
+  const takeNamedDecl = (node: import('web-tree-sitter').Node): void => {
+    const name = field(node, 'name')?.text;
+    if (name) sym.unknownMembers.add(name);
+  };
+
+  for (const statement of root.namedChildren) {
+    if (statement.type === 'function_declaration') {
+      takeFunction(statement, false);
+      continue;
+    }
+    if (statement.type === 'lexical_declaration' || statement.type === 'variable_declaration') {
+      for (const d of statement.namedChildren) {
+        if (d.type === 'variable_declarator') takeArrowConst(d, false);
+      }
+      continue;
+    }
+    if (statement.type === 'import_statement') {
+      const from = statement.namedChildren.find((c) => c.type === 'string');
+      const clause = statement.namedChildren.find((c) => c.type === 'import_clause');
+      if (!from || !clause) continue;
+      const source = unquoteTs(from.text);
+      for (const part of clause.namedChildren) {
+        if (part.type === 'named_imports') {
+          for (const spec of part.namedChildren) {
+            if (spec.type !== 'import_specifier') continue;
+            const name = field(spec, 'name')?.text;
+            const alias = field(spec, 'alias')?.text;
+            if (name) {
+              sym.imports!.set(alias ?? name, { from: source, name });
+              sym.unknownMembers.add(alias ?? name);
+            }
+          }
+        } else if (part.type === 'identifier') {
+          // `import foo from './x'` — the default export, bound locally.
+          sym.imports!.set(part.text, { from: source, name: 'default' });
+          sym.unknownMembers.add(part.text);
+        } else if (part.type === 'namespace_import') {
+          // `import * as ns from './x'` binds `ns` to the whole namespace
+          // object. It is a member of THIS file, not of the module it came
+          // from, so it has no single symbol to delegate to.
+          const nsName = part.namedChildren.find((c) => c.type === 'identifier')?.text;
+          if (nsName) sym.unknownMembers.add(nsName);
+        }
+      }
+      continue;
+    }
+    if (statement.type === 'export_statement') {
+      const isDefault = statement.children.some((c) => !c.isNamed && c.text === 'default');
+      let sawDefaultTarget = false;
+      for (const child of statement.namedChildren) {
+        if (child.type === 'function_declaration') {
+          if (isDefault) {
+            sawDefaultTarget = true;
+            const fn = methodFromFunction(child);
+            if (fn) {
+              declared.set(fn.name, fn);
+              sym.methods.set('default', { ...fn, name: 'default' });
+            } else {
+              sym.unknownMembers.add('default');
+            }
+          } else {
+            takeFunction(child, true);
+          }
+        } else if (child.type === 'lexical_declaration' || child.type === 'variable_declaration') {
+          for (const d of child.namedChildren) {
+            if (d.type === 'variable_declarator') takeArrowConst(d, true);
+          }
+        } else if (
+          child.type === 'class_declaration' ||
+          child.type === 'interface_declaration' ||
+          child.type === 'enum_declaration' ||
+          child.type === 'type_alias_declaration'
+        ) {
+          if (isDefault) {
+            sawDefaultTarget = true;
+            sym.unknownMembers.add('default');
+          } else {
+            takeNamedDecl(child);
+          }
+        } else if (child.type === 'export_clause') {
+          // `export { foo, bar as baz }` re-exports names declared earlier
+          // in this file under their local (or aliased) name.
+          for (const spec of child.namedChildren) {
+            if (spec.type !== 'export_specifier') continue;
+            const localName = field(spec, 'name')?.text;
+            const exportedName = field(spec, 'alias')?.text ?? localName;
+            if (!exportedName) continue;
+            const fn = localName ? declared.get(localName) : undefined;
+            if (fn) sym.methods.set(exportedName, fn);
+            else sym.unknownMembers.add(exportedName);
+          }
+        }
+      }
+      // `export default <expr>` with no declaration child at all — an
+      // identifier, object literal, call expression, and so on. Still a
+      // reachable member, just not one with a signature.
+      if (isDefault && !sawDefaultTarget && !sym.methods.has('default')) {
+        sym.unknownMembers.add('default');
+      }
+      continue;
+    }
+  }
+
+  // CommonJS. `module.exports = { getPool }`, `module.exports.getPool = ...`
+  // and `exports.getPool = ...` all name members reachable from outside this
+  // file, whether or not they resolve to something declared above with a
+  // signature this pass can read.
+  for (const { node } of walk(root)) {
+    if (node.type !== 'assignment_expression') continue;
+    const left = field(node, 'left')?.text ?? '';
+    if (!/^(module\.)?exports\b/.test(left)) continue;
+    const right = field(node, 'right');
+
+    const property = /^(?:module\.)?exports\.([A-Za-z_$][\w$]*)$/.exec(left);
+    if (property?.[1]) {
+      const propName = property[1];
+      if (sym.methods.has(propName)) continue;
+      const viaIdentifier = right?.type === 'identifier' ? declared.get(right.text) : undefined;
+      const viaValue = right ? fnFromValue(propName, right, node.startPosition.row + 1) : null;
+      const fn = viaIdentifier ?? viaValue;
+      if (fn) sym.methods.set(propName, fn);
+      else sym.unknownMembers.add(propName);
+      continue;
+    }
+
+    if (!/^(module\.)?exports$/.test(left)) continue;
+    if (right?.type !== 'object') continue; // exportsByFile already marked '*' for this
+
+    for (const entry of right.namedChildren) {
+      if (entry.type === 'comment' || entry.type === 'spread_element') continue;
+      const key =
+        entry.type === 'shorthand_property_identifier'
+          ? entry
+          : (field(entry, 'key') ?? field(entry, 'name'));
+      if (!key || key.type === 'computed_property_name') continue;
+      const keyName = key.type === 'string' ? unquoteTs(key.text) : key.text;
+      if (sym.methods.has(keyName)) continue;
+      const viaIdentifier = declared.get(keyName);
+      const pairValue = entry.type === 'pair' ? field(entry, 'value') : null;
+      const viaValue = pairValue
+        ? fnFromValue(keyName, pairValue, entry.startPosition.row + 1)
+        : field(entry, 'parameters')
+          ? methodFromFunction(entry)
+          : null;
+      const fn = viaIdentifier ?? viaValue;
+      if (fn) sym.methods.set(keyName, fn);
+      else sym.unknownMembers.add(keyName);
+    }
+  }
+
+  return sym;
 }
 
 export async function indexTsFile(
@@ -339,6 +577,8 @@ export async function indexTsFile(
 
     addType(graph, typeSym);
   }
+
+  addModule(graph, moduleSymbolFor(relFile, root, graph));
 }
 
 function paramFromTs(p: import('web-tree-sitter').Node): ParamSymbol | null {
