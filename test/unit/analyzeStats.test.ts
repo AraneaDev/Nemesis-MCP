@@ -85,6 +85,23 @@ function statsForGraph(graph: SymbolGraph, doubles: TestDouble[]): AnalyzeStats 
   return stats;
 }
 
+/** Both halves at once, for asserting that the summary agrees with what was printed. */
+function reportFor(
+  graph: SymbolGraph,
+  doubles: TestDouble[],
+  lines: string[],
+): { stats: AnalyzeStats; findings: ReturnType<typeof analyzeDoubles> } {
+  const stats: AnalyzeStats = { checked: 0, unresolved: 0, unknowable: 0, noTarget: 0 };
+  const findings = analyzeDoubles({
+    doubles,
+    graph,
+    fileLines: new Map([['tests/a.test.ts', lines]]),
+    options: { strictness: 'all', languages: [] },
+    stats,
+  });
+  return { stats, findings };
+}
+
 describe('what the analyzer reports having reached', () => {
   it('counts a double whose member was compared', () => {
     expect(statsFor([double('Svc', 'run')])).toEqual({
@@ -267,5 +284,38 @@ describe('a target reached through the module binding map', () => {
     // Same text as the module-bound case, but without the binding: this is
     // still indistinguishable from a local fake, so it stays unresolved.
     expect(statsFor([double('lodash', 'debounce')]).unresolved).toBe(1);
+  });
+
+  // The target does not resolve to a type, so the resolution question alone
+  // says "unresolved". But the scan read the module the name is imported from,
+  // answered the question and printed a violation, so the summary has to admit
+  // to having checked it. A column that contradicts the violation beside it is
+  // worse than no column.
+  it('counts a deleted import as checked, because it is reported', () => {
+    const graph = graphWithSvc();
+    graph.exportsByFile.set('src/svc.ts', new Set(['Kept']));
+    const { stats, findings } = reportFor(
+      graph,
+      [{ ...double('gone', 'run'), line: 2 }],
+      ['', "import { gone } from '../src/svc';"],
+    );
+    expect(findings.map((f) => f.message)).toContainEqual(
+      expect.stringContaining('not exported there any more'),
+    );
+    expect(stats.checked).toBe(1);
+    expect(stats.unresolved).toBe(0);
+  });
+
+  it('still counts a target in a file this scan never read as unresolved', () => {
+    // Nothing was printed about it, so nothing was checked. The two halves
+    // agree the other way round too.
+    const { stats, findings } = reportFor(
+      graphWithSvc(),
+      [{ ...double('Gone', 'run'), line: 2 }],
+      ['', "import { Gone } from '../src/elsewhere';"],
+    );
+    expect(findings).toEqual([]);
+    expect(stats.checked).toBe(0);
+    expect(stats.unresolved).toBe(1);
   });
 });

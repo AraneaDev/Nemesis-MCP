@@ -685,8 +685,19 @@ function classify(
  * two ask the same resolution question, and a double that resolves but whose
  * member is missing counts as checked, because the analyzer had something to
  * say about it.
+ *
+ * Every question `classify` can answer has to be asked here too, or the
+ * summary contradicts the violations printed beside it. Resolution is not the
+ * only such question: a deleted import is answered from the module's export
+ * list without the target resolving to a type at all.
  */
-function countDouble(d: TestDouble, graph: SymbolGraph, stats: AnalyzeStats): void {
+function countDouble(
+  d: TestDouble,
+  graph: SymbolGraph,
+  stats: AnalyzeStats,
+  lines: string[],
+  symbolsByFile: Map<string, Set<string>>,
+): void {
   // A factory-value double is a second view of a `vi.mock` key the
   // module-shape double for the same call already accounts for, not a
   // second user-written double. It still gets `classify`d for its own
@@ -729,6 +740,15 @@ function countDouble(d: TestDouble, graph: SymbolGraph, stats: AnalyzeStats): vo
   const hint = { language: d.language, fromFile: d.file };
   const reached = resolveDoubleType(d, graph, hint);
   if (reached) {
+    stats.checked += 1;
+    return;
+  }
+
+  // The target resolved to nothing, which is exactly where `classify` asks its
+  // other question: is this a name the scan watched leave a module it read?
+  // When that answers, a violation is printed, so the double was compared
+  // against something and belongs in `checked` rather than in `unresolved`.
+  if (importedButGone(d, lines, symbolsByFile, graph.exportsByFile)) {
     stats.checked += 1;
     return;
   }
@@ -1078,7 +1098,7 @@ export function analyzeDoubles(input: AnalyzeInput): Finding[] {
   const stats = input.stats;
   for (const d of input.doubles) {
     const lines = input.fileLines.get(d.file) ?? [];
-    if (stats) countDouble(d, input.graph, stats);
+    if (stats) countDouble(d, input.graph, stats, lines, symbolsByFile);
     findings.push(...classify(d, input.graph, lines, reportedFinalTargets, symbolsByFile));
   }
   const seen = new Set<string>();
@@ -1574,8 +1594,6 @@ function literalUnionCheck(
 
 const IMPORT_NAMED = /^\s*import\s+(?:type\s+)?\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]/;
 const IMPORT_DEFAULT = /^\s*import\s+(?:type\s+)?([A-Za-z_$][\w$]*)\s+from\s*['"]([^'"]+)['"]/;
-const EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs'];
-
 /**
  * A manual mock in `__mocks__` stands in for the module beside its directory,
  * and the names it exports are what the test believes that module exports. An
@@ -1660,6 +1678,22 @@ function moduleShapeFindings(
   return findings;
 }
 
+const EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs'];
+
+/** Repository-relative paths a relative specifier could mean. */
+function resolveSpecifier(fromFile: string, specifier: string): string[] {
+  const base = path.posix.normalize(
+    path.posix.join(path.posix.dirname(fromFile.split(path.sep).join('/')), specifier),
+  );
+  const stripped = base.replace(/\.(m|c)?js$/, ''); // ESM TypeScript writes .js
+  const out: string[] = [];
+  for (const stem of new Set([base, stripped])) {
+    for (const extension of EXTENSIONS) out.push(stem + extension);
+    for (const extension of EXTENSIONS) out.push(`${stem}/index${extension}`);
+  }
+  return out;
+}
+
 /**
  * A target the test imports from a file this scan actually read, where that
  * file no longer declares it: a class that was renamed or deleted and left a
@@ -1723,18 +1757,4 @@ function importedButGone(
     }
   }
   return null;
-}
-
-/** Repository-relative paths a relative specifier could mean. */
-function resolveSpecifier(fromFile: string, specifier: string): string[] {
-  const base = path.posix.normalize(
-    path.posix.join(path.posix.dirname(fromFile.split(path.sep).join('/')), specifier),
-  );
-  const stripped = base.replace(/\.(m|c)?js$/, ''); // ESM TypeScript writes .js
-  const out: string[] = [];
-  for (const stem of new Set([base, stripped])) {
-    for (const extension of EXTENSIONS) out.push(stem + extension);
-    for (const extension of EXTENSIONS) out.push(`${stem}/index${extension}`);
-  }
-  return out;
 }
