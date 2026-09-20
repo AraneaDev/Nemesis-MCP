@@ -36,3 +36,8 @@ docs/superpowers/
 # mutation testing
 /.stryker-tmp/
 /reports/
+
+# Design artefacts live outside the repository. A spec and a plan are working
+# notes for building the thing, not reference material for using it, and they
+# go stale the moment the code moves past them.
+/docs/
