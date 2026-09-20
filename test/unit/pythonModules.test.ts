@@ -136,22 +136,17 @@ describe('the module symbol for a Python file', () => {
     expect(m.unknownMembers.has('attr')).toBe(false);
   });
 
-  it('treats a builtin as a member even when the module neither imports nor defines it', async () => {
-    // unittest.mock has special-cased builtins since Python 3.5: "If you are
-    // patching builtins in a module then you don't need to pass create=True,
-    // it will be added by default." `open` is reachable on any module.
+  it('does not seed unknownMembers with the Python builtins any more', async () => {
+    // `open`, `print` and `len` are still reachable on any module (see
+    // `PYTHON_BUILTINS` in core/pythonBuiltins.ts and how the analyzer
+    // consults it), but that exemption is no longer folded into this set:
+    // doing so made `unknownMembers.size > 0` true for every Python module,
+    // which is a different check (the ghost confidence downgrade) than the
+    // one this exemption is for.
     const m = await moduleOf('def run():\n    pass\n');
-    expect(m.unknownMembers.has('open')).toBe(true);
-  });
-
-  it('treats print as a member for the same reason', async () => {
-    const m = await moduleOf('def run():\n    pass\n');
-    expect(m.unknownMembers.has('print')).toBe(true);
-  });
-
-  it('treats len as a member for the same reason', async () => {
-    const m = await moduleOf('def run():\n    pass\n');
-    expect(m.unknownMembers.has('len')).toBe(true);
+    expect(m.unknownMembers.has('open')).toBe(false);
+    expect(m.unknownMembers.has('print')).toBe(false);
+    expect(m.unknownMembers.has('len')).toBe(false);
   });
 
   it('still reports a name that is neither a builtin nor bound as missing', async () => {

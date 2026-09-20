@@ -23,6 +23,7 @@ import {
 } from './symbolGraph.js';
 import { languageForFile } from './discovery.js';
 import { resolveModule } from './moduleResolve.js';
+import { PYTHON_BUILTINS } from './pythonBuiltins.js';
 
 const SUPPRESSION = /nemesis-ignore/i;
 
@@ -241,6 +242,14 @@ function classify(
       owner.methods.has('__call')
     )
       continue;
+
+    // A Python builtin is reachable on any module without that module
+    // binding it, whether or not the module ever had a member of that name.
+    // Consulted here, at lookup time, rather than folded into
+    // `unknownMembers`, so it never inflates the module's "known" size.
+    if (!real && lang === 'python' && owner.kind === 'module' && PYTHON_BUILTINS.has(m.name)) {
+      continue;
+    }
 
     if (!real && !owner.unknownMembers.has(m.name) && !owner.unknownMembers.has('*')) {
       const suggestion = suggestMember(owner, m.name);

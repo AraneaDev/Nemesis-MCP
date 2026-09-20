@@ -128,86 +128,6 @@ function identifiersInTarget(node: SyntaxNode): string[] {
 }
 
 /**
- * `unittest.mock` has special-cased builtins since Python 3.5: "If you are
- * patching builtins in a module then you don't need to pass create=True, it
- * will be added by default." `patch("services.files_service.open", ...)` is
- * correct code even though `files_service.py` neither imports nor defines
- * `open` — the name is reachable on every module regardless of what that
- * module actually binds. This is the fixed, enumerable set of names that
- * makes true, so it is a list rather than a heuristic.
- */
-const PYTHON_BUILTINS = new Set([
-  'open',
-  'print',
-  'input',
-  'len',
-  'range',
-  'isinstance',
-  'issubclass',
-  'hasattr',
-  'getattr',
-  'setattr',
-  'delattr',
-  'callable',
-  'super',
-  'type',
-  'id',
-  'hash',
-  'repr',
-  'str',
-  'int',
-  'float',
-  'bool',
-  'bytes',
-  'bytearray',
-  'memoryview',
-  'list',
-  'dict',
-  'set',
-  'frozenset',
-  'tuple',
-  'object',
-  'exec',
-  'eval',
-  'compile',
-  '__import__',
-  'globals',
-  'locals',
-  'vars',
-  'dir',
-  'next',
-  'iter',
-  'sorted',
-  'reversed',
-  'enumerate',
-  'zip',
-  'map',
-  'filter',
-  'sum',
-  'min',
-  'max',
-  'abs',
-  'round',
-  'any',
-  'all',
-  'format',
-  'chr',
-  'ord',
-  'bin',
-  'hex',
-  'oct',
-  'divmod',
-  'pow',
-  'slice',
-  'complex',
-  'staticmethod',
-  'classmethod',
-  'property',
-  'breakpoint',
-  'help',
-]);
-
-/**
  * The module symbol for a Python file: what it defines at the top level, and
  * what it binds from elsewhere.
  *
@@ -223,10 +143,9 @@ function moduleSymbolFor(relFile: string, root: SyntaxNode): TypeSymbol {
     kind: 'module',
     methods: new Map(),
     imports: new Map(),
-    // A builtin is reachable on any module without being bound by it, so it
-    // starts present-but-unknowable rather than needing this file to mention
-    // it at all.
-    unknownMembers: new Set(PYTHON_BUILTINS),
+    // Builtins are exempted at lookup time (see `PYTHON_BUILTINS`), not
+    // seeded here: this set is what the module itself actually binds.
+    unknownMembers: new Set(),
     extends: [],
     implements: [],
     uses: [],
