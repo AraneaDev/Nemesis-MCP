@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.3.0](https://github.com/AraneaDev/Nemesis-MCP/compare/v0.2.5...v0.3.0) (2026-09-20)
+
+
+### Features
+
+* count mock sites the extractor recognised but could not read ([9995c4d](https://github.com/AraneaDev/Nemesis-MCP/commit/9995c4dc783a941d4847302f679ca5bb80a555d1))
+* count python patch targets the extractor could not read ([dcb3c30](https://github.com/AraneaDev/Nemesis-MCP/commit/dcb3c30b674b96afa2cb96536878c46052de65de))
+
+
+### Fixes
+
+* count positional arguments over the real ones, not the comments ([4cb5dc2](https://github.com/AraneaDev/Nemesis-MCP/commit/4cb5dc22fc78bf1a0d7f1998595b13df49470e5e))
+* guard the assigned patch target against interpolation too ([819842d](https://github.com/AraneaDev/Nemesis-MCP/commit/819842d5a0952cdc3804d5961e1a34f30ba0a28d))
+* read a shorthand key in a module mock factory ([936f70f](https://github.com/AraneaDev/Nemesis-MCP/commit/936f70f70d56ae0672cc59e45e404992c334f69d))
+
 ## [0.2.5](https://github.com/AraneaDev/Nemesis-MCP/compare/v0.2.4...v0.2.5) (2026-09-20)
 
 
