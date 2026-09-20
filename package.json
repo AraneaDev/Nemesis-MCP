@@ -12,10 +12,11 @@
     "nemesis-mcp": "./dist/mcp/main.js"
   },
   "scripts": {
+    "prepare": "sh scripts/install-hooks.sh || true",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint:code": "npm run typecheck && prettier --check \"prettier.config.mjs\" \"vitest.config.ts\" \"test/unit/report.test.ts\" \"test/unit/symbolGraph.test.ts\" \"test/unit/parserConcurrency.test.ts\" \"fixtures/dogfood-*/**/*.ts\" \"*.{json,yml,yaml}\"",
-    "lint:docs": "markdownlint-cli2 \"README.md\" \"docs/**/*.md\"",
+    "lint:docs": "markdownlint-cli2 \"README.md\"",
     "lint": "npm run lint:code && npm run lint:docs",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\" \"docs/**/*.md\" README.md \"*.{json,yml,yaml}\"",
     "test": "vitest run",

@@ -251,7 +251,18 @@ function classify(
       continue;
     }
 
-    if (!real && !owner.unknownMembers.has(m.name) && !owner.unknownMembers.has('*')) {
+    // A factory value's existence is check 28's business, not this branch's.
+    // The module-shape double already reports a key the module does not
+    // export, against the specifier the test actually wrote. Letting the
+    // factory-value double answer the same question a second time printed
+    // every such finding twice, once naming the specifier and once naming the
+    // resolved file, both definite.
+    if (
+      !real &&
+      !d.fromFactory &&
+      !owner.unknownMembers.has(m.name) &&
+      !owner.unknownMembers.has('*')
+    ) {
       const suggestion = suggestMember(owner, m.name);
       // A member missing from a type whose ancestry runs outside the scanned
       // tree may simply be inherited from there, so it cannot be called a
