@@ -717,10 +717,15 @@ function countDouble(d: TestDouble, graph: SymbolGraph, stats: AnalyzeStats): vo
     return;
   }
 
-  if (isUnknowableTarget(d.targetSymbol)) {
-    stats.unknowable += 1;
-    return;
-  }
+  // Resolve BEFORE consulting either unknowable check. Both
+  // `isUnknowableTarget` and the module-binding check below classify a
+  // target from its text alone (a scoped-package-shaped alias such as
+  // `@scope/thing`, or a repository class that happens to share a name with
+  // a global such as `Storage` or `Date`), and a text-based guess run first
+  // was wrong whenever resolution — including through a path alias — would
+  // have succeeded. Asking first and falling back to the text-based guess
+  // only on failure is what `classify` already does, and the two have to
+  // agree or the summary contradicts the violations printed beside it.
   const hint = { language: d.language, fromFile: d.file };
   const reached = resolveDoubleType(d, graph, hint);
   if (reached) {
@@ -746,6 +751,11 @@ function countDouble(d: TestDouble, graph: SymbolGraph, stats: AnalyzeStats): vo
     !d.targetSymbol.startsWith('.') &&
     !isTsAliasSpecifier(graph, d.targetSymbol, d.file)
   ) {
+    stats.unknowable += 1;
+    return;
+  }
+
+  if (isUnknowableTarget(d.targetSymbol)) {
     stats.unknowable += 1;
     return;
   }
