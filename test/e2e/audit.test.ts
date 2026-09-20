@@ -21,6 +21,35 @@ function runCli(args: string[], cwd: string): { stdout: string; status: number }
 }
 
 describe('nemesis audit end-to-end', () => {
+  // `audit .` is the most natural way to ask for the whole repository, and it
+  // matched nothing: the requested path was compared verbatim against
+  // repository-relative file paths, which never start with `./`. The audit
+  // reported a clean, empty result and exited 0.
+  it('scans the whole tree when the path is given as "."', () => {
+    const pythonFixture = path.join(root, 'fixtures', 'python');
+    const dot = JSON.parse(
+      runCli(['audit', '.', '--strictness=all', '--json'], pythonFixture).stdout,
+    );
+    expect(dot.summary.scanned_test_files).toBeGreaterThan(0);
+    expect(dot.summary.doubles_inspected).toBeGreaterThan(0);
+
+    // The same scan, named from the repository root, has to agree.
+    const named = JSON.parse(
+      runCli(['audit', 'fixtures/python', '--strictness=all', '--json'], root).stdout,
+    );
+    expect(dot.summary.scanned_test_files).toBe(named.summary.scanned_test_files);
+    expect(dot.summary.violations_count).toBe(named.summary.violations_count);
+  }, 120_000);
+
+  it('spells a requested path the same way however it is written', () => {
+    const summaryFor = (p: string) =>
+      JSON.parse(runCli(['audit', p, '--strictness=all', '--json'], root).stdout).summary;
+    const plain = summaryFor('fixtures/python');
+    for (const variant of ['./fixtures/python', 'fixtures/python/', 'fixtures/./python']) {
+      expect(summaryFor(variant).scanned_test_files).toBe(plain.scanned_test_files);
+    }
+  }, 120_000);
+
   it('finds all four violation types across ecosystems', () => {
     const { stdout, status } = runCli(['audit', 'fixtures', '--strictness=all', '--json'], root);
     expect(status).toBe(1);
