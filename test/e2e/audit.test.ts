@@ -138,9 +138,9 @@ describe('nemesis audit end-to-end', () => {
   }, 120_000);
 
   it('says how many doubles it actually compared', () => {
-    // `doubles_inspected` counts doubles found. On one repository in the
-    // corpus it read 4,772 when 47 had been compared against anything, and a
-    // clean result has to carry the evidence for how clean it is.
+    // `doubles_inspected` counts doubles found, not doubles compared, and on a
+    // large repository the two can differ by orders of magnitude. A clean
+    // result has to carry the evidence for how clean it is.
     const { stdout } = runCli(['audit', 'fixtures', '--strictness=all', '--json'], root);
     const { summary } = JSON.parse(stdout);
     // Every inspected double lands in exactly one bucket, so the four have to

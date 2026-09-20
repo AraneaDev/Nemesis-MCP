@@ -271,9 +271,10 @@ export interface AnalyzeOptions {
 /**
  * What the analyzer actually reached, counted per double.
  *
- * `doubles_inspected` used to be the only number in the summary, and it
- * counts doubles found rather than doubles compared. On one repository in
- * the corpus it read 4,772 when 47 had been compared against anything.
+ * `doubles_inspected` used to be the only number in the summary, and it counts
+ * doubles found rather than doubles compared. On a large repository the two can
+ * differ by orders of magnitude, so a clean audit said nothing about how much
+ * had actually been checked. That is why the summary reports both.
  */
 export interface AnalyzeStats {
   /**
