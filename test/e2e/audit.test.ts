@@ -114,9 +114,16 @@ describe('nemesis audit end-to-end', () => {
     // clean result has to carry the evidence for how clean it is.
     const { stdout } = runCli(['audit', 'fixtures', '--strictness=all', '--json'], root);
     const { summary } = JSON.parse(stdout);
+    // Every inspected double lands in exactly one bucket, so the four have to
+    // add up to the total. Asserted as an equality including
+    // `doubles_untargeted`: with `<=` over three of the four, a double that
+    // fell out of the count entirely still passed.
     const accounted =
-      summary.doubles_checked + summary.doubles_unresolved + summary.doubles_unknowable;
-    expect(accounted).toBeLessThanOrEqual(summary.doubles_inspected);
+      summary.doubles_checked +
+      summary.doubles_unresolved +
+      summary.doubles_unknowable +
+      summary.doubles_untargeted;
+    expect(accounted).toBe(summary.doubles_inspected);
     expect(summary.doubles_checked).toBeGreaterThan(0);
     expect(summary.doubles_unknowable).toBeGreaterThan(0);
   }, 120_000);
