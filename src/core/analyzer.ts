@@ -187,19 +187,26 @@ function moduleAttribute(
   graph: SymbolGraph,
   target: string,
   fromFile: string,
-): { mod: TypeSymbol; attr: string; bound: boolean } | null {
-  const idx = target.lastIndexOf('.');
-  if (idx <= 0) return null;
-  const mod = resolveModule(graph, target.slice(0, idx), fromFile);
-  if (!mod || mod.kind !== 'module') return null;
-  const attr = target.slice(idx + 1);
-  const bound =
-    mod.methods.has(attr) ||
-    mod.unknownMembers.has(attr) ||
-    mod.unknownMembers.has('*') ||
-    Boolean(mod.fields?.has(attr)) ||
-    Boolean(mod.imports?.has(attr));
-  return { mod, attr, bound };
+): { mod: TypeSymbol; attr: string; rest: string[]; bound: boolean } | null {
+  // The module is not always one segment back. `routers.files.os.path` reaches
+  // `os.path` through the `os` that `routers/files.py` imports, so the module
+  // ends two segments from the end. Split from the right and take the first
+  // prefix that is a module, which is the longest one and therefore the nearest
+  // enclosing module rather than a package that happens to share a prefix.
+  const parts = target.split('.');
+  for (let cut = parts.length - 1; cut >= 1; cut--) {
+    const mod = resolveModule(graph, parts.slice(0, cut).join('.'), fromFile);
+    if (!mod || mod.kind !== 'module') continue;
+    const attr = parts[cut]!;
+    const bound =
+      mod.methods.has(attr) ||
+      mod.unknownMembers.has(attr) ||
+      mod.unknownMembers.has('*') ||
+      Boolean(mod.fields?.has(attr)) ||
+      Boolean(mod.imports?.has(attr));
+    return { mod, attr, rest: parts.slice(cut + 1), bound };
+  }
+  return null;
 }
 
 /**
@@ -221,7 +228,13 @@ function moduleAttributeType(
   if (depth > 4) return null;
   const found = moduleAttribute(graph, target, fromFile);
   if (!found) return null;
-  const { mod, attr } = found;
+  const { mod, attr, rest } = found;
+
+  // `routers.files.os.path` reaches through `os` to `path`. The attribute is
+  // reached, but nothing here can follow further into it, so there is no type
+  // to return. `moduleAttribute` still reports the name as bound, which is what
+  // keeps the double out of `unresolved`.
+  if (rest.length > 0) return null;
 
   const constructed = mod.fields?.get(attr)?.type;
   if (constructed) {

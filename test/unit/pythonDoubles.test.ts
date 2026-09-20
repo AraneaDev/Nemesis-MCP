@@ -325,3 +325,49 @@ describe('a patch target the test file imported', () => {
     expect(stats.unknowable).toBe(0);
   });
 });
+
+// `patch("routers.files.os.path.exists")` reaches `os.path` through the `os`
+// that `routers/files.py` imports. The module is two segments back from the
+// end, not one, and splitting only the last segment found no module at all.
+describe('a patch target reaching through a module attribute', () => {
+  async function stats(files: Record<string, string>, target: string) {
+    const g = emptyGraph();
+    for (const [f, src] of Object.entries(files)) await indexPythonFile(f, src, g);
+    const src = `from unittest.mock import patch\ndef t():\n    with patch('${target}'): pass\n`;
+    const s = { checked: 0, unresolved: 0, unknowable: 0, noTarget: 0 };
+    analyzeDoubles({
+      doubles: await extractPythonDoubles('tests/test_x.py', src),
+      graph: g,
+      fileLines: new Map([['tests/test_x.py', src.split('\n')]]),
+      options: { strictness: 'all' },
+      stats: s,
+    });
+    return s;
+  }
+
+  it('counts a stdlib attribute reached through a module as having no contract', async () => {
+    const s = await stats(
+      { 'routers/files.py': 'import os\n\ndef listing():\n    return os.path.exists("/")\n' },
+      'routers.files.os.path.exists',
+    );
+    expect(s.unknowable).toBe(1);
+    expect(s.unresolved).toBe(0);
+  });
+
+  it('still finds the nearer module when both prefixes exist', async () => {
+    const s = await stats(
+      {
+        'core/jobs.py': 'import asyncio\n\ndef run():\n    pass\n',
+        'core/jobs/inner.py': 'def other():\n    pass\n',
+      },
+      'core.jobs.asyncio.sleep',
+    );
+    expect(s.unknowable).toBe(1);
+  });
+
+  it('leaves a target whose every prefix is unknown unresolved', async () => {
+    const s = await stats({ 'core/jobs.py': 'def run():\n    pass\n' }, 'nowhere.at.all.x');
+    expect(s.unresolved).toBe(1);
+    expect(s.unknowable).toBe(0);
+  });
+});
