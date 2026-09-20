@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.5](https://github.com/AraneaDev/Nemesis-MCP/compare/v0.2.4...v0.2.5) (2026-09-20)
+
+
+### Fixes
+
+* find the module in a target that reaches through an attribute ([998c917](https://github.com/AraneaDev/Nemesis-MCP/commit/998c91774dffae8a8ed021298dbc28e8c4047363))
+* read a Python attribute assigned on self ([ad5581a](https://github.com/AraneaDev/Nemesis-MCP/commit/ad5581a7b9e1748214914b328d93c3b7b4210305))
+* read the module mocks a path alias or a spread was hiding ([92b20b3](https://github.com/AraneaDev/Nemesis-MCP/commit/92b20b3490941d5316299d6807e93300339da7fb))
+* resolve a patch target that names an object a module holds ([47366c5](https://github.com/AraneaDev/Nemesis-MCP/commit/47366c55ef1ab00d611fb73a34f336bcdcacb821))
+* resolve a patch target the test file imported ([92d65f2](https://github.com/AraneaDev/Nemesis-MCP/commit/92d65f260cff47007117b534d1980a5b1ee4634e))
+* say so when a file could not be parsed ([74c8ffc](https://github.com/AraneaDev/Nemesis-MCP/commit/74c8ffca3f4827effb3bb0dce0f0e45e6a5de1db))
+
 ## [0.2.4](https://github.com/AraneaDev/Nemesis-MCP/compare/v0.2.3...v0.2.4) (2026-09-20)
 
 
