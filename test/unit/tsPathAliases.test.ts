@@ -103,6 +103,52 @@ describe('reading tsconfig.json off disk', () => {
   });
 });
 
+describe('extends: inherited baseUrl and paths stay relative to where they were declared', () => {
+  it('resolves a parent-declared path alias against the parent directory, not the child', async () => {
+    // A shared base config at the repo root, the normal monorepo shape:
+    // every package's tsconfig extends it and adds nothing of its own.
+    const monorepo = await mkdtemp(path.join(tmpdir(), 'nemesis-extends-'));
+    try {
+      await mkdir(path.join(monorepo, 'packages', 'core', 'src'), { recursive: true });
+      await mkdir(path.join(monorepo, 'frontend'), { recursive: true });
+      await writeFile(
+        path.join(monorepo, 'tsconfig.base.json'),
+        JSON.stringify({
+          compilerOptions: {
+            baseUrl: '.',
+            paths: { '@core/*': ['packages/core/src/*'] },
+          },
+        }),
+      );
+      await writeFile(
+        path.join(monorepo, 'frontend', 'tsconfig.json'),
+        JSON.stringify({ extends: '../tsconfig.base.json', compilerOptions: {} }),
+      );
+      await writeFile(
+        path.join(monorepo, 'packages', 'core', 'src', 'index.ts'),
+        'export function coreThing(): number {\n  return 1;\n}\n',
+      );
+
+      const rules = await loadTsPathAliases(monorepo);
+      const rule = rules.find((r) => r.prefix === '@core/');
+      // TypeScript's own rule: a relative path resolves against the config
+      // file that declared it. `tsconfig.base.json` sits at the repo root,
+      // so `packages/core/src/*` resolves against `.`, never against
+      // `frontend`, the directory of the config that merely inherits it.
+      expect(rule?.targets).toEqual(['packages/core/src/*']);
+
+      const g = emptyGraph();
+      addModule(g, mod('packages/core/src/index.ts'));
+      g.tsPathAliases = rules;
+      expect(resolveModule(g, '@core/index', 'frontend/tests/a.test.ts')?.file).toBe(
+        'packages/core/src/index.ts',
+      );
+    } finally {
+      await rm(monorepo, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('applying parsed aliases through resolveModule', () => {
   function graphWith(...files: string[]): SymbolGraph {
     const g = emptyGraph();

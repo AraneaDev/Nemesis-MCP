@@ -272,17 +272,27 @@ function parseJsonc(text: string): unknown | null {
 }
 
 interface CompilerPaths {
-  baseUrl?: string;
-  paths?: Record<string, unknown>;
+  /** Already resolved to rootDir-relative posix paths, each against the
+   *  directory (and `baseUrl`, if any) of the config that declared it. */
+  paths?: Record<string, string[]>;
 }
 
 /**
  * Read one `tsconfig.json`, following a relative `extends` chain and merging
- * `baseUrl`/`paths` along the way (the file itself wins over what it
- * extends). An `extends` that is not a relative path (a package like
- * `@tsconfig/node18`) is left unfollowed: resolving it would mean reading
- * into `node_modules`, which is not cheap, so it is treated as contributing
- * no aliases rather than guessed at.
+ * `paths` along the way (a key the file declares itself wins over the same
+ * key inherited from what it extends). An `extends` that is not a relative
+ * path (a package like `@tsconfig/node18`) is left unfollowed: resolving it
+ * would mean reading into `node_modules`, which is not cheap, so it is
+ * treated as contributing no aliases rather than guessed at.
+ *
+ * TypeScript resolves `baseUrl` and `paths` relative to the directory of the
+ * config file that DECLARES them, not the directory of a child config that
+ * merely inherits them via `extends`. A child that adds its own `paths`
+ * without its own `baseUrl` resolves those relative to its own directory
+ * (`baseUrl` defaults to `.`) — never to a parent's `baseUrl`, and a parent's
+ * `paths` never resolves against the child's directory either. So each
+ * level's `paths` is resolved to an absolute (rootDir-relative) target here,
+ * at the point it is read, before it is merged into what a child inherits.
  */
 async function readTsconfigMerged(
   rootDir: string,
@@ -318,9 +328,18 @@ async function readTsconfigMerged(
   const co = obj.compilerOptions;
   if (co && typeof co === 'object') {
     const co2 = co as Record<string, unknown>;
-    if (typeof co2.baseUrl === 'string') merged.baseUrl = co2.baseUrl;
     if (co2.paths && typeof co2.paths === 'object') {
-      merged.paths = { ...(merged.paths ?? {}), ...(co2.paths as Record<string, unknown>) };
+      const selfDir = path.posix.dirname(relPath.split(path.sep).join('/'));
+      const baseUrl = typeof co2.baseUrl === 'string' ? co2.baseUrl : '.';
+      const baseDir = path.posix.normalize(path.posix.join(selfDir, baseUrl));
+      const resolved: Record<string, string[]> = {};
+      for (const [k, rawTargets] of Object.entries(co2.paths as Record<string, unknown>)) {
+        if (!Array.isArray(rawTargets)) continue;
+        resolved[k] = rawTargets
+          .filter((t): t is string => typeof t === 'string')
+          .map((t) => path.posix.normalize(path.posix.join(baseDir, t)));
+      }
+      merged.paths = { ...(merged.paths ?? {}), ...resolved };
     }
   }
   return merged;
@@ -344,18 +363,12 @@ export async function loadTsPathAliases(
     if (!merged?.paths) continue;
 
     const configDir = path.posix.dirname(relPath.split(path.sep).join('/'));
-    const baseUrl = merged.baseUrl ?? '.';
-    const baseDir = path.posix.normalize(path.posix.join(configDir, baseUrl));
 
-    for (const [key, rawTargets] of Object.entries(merged.paths)) {
+    for (const [key, targets] of Object.entries(merged.paths)) {
       if ((key.match(/\*/g) ?? []).length > 1) continue; // not a valid TS pattern
-      if (!Array.isArray(rawTargets)) continue;
       const starIdx = key.indexOf('*');
       const prefix = starIdx === -1 ? key : key.slice(0, starIdx);
       const suffix = starIdx === -1 ? '' : key.slice(starIdx + 1);
-      const targets = rawTargets
-        .filter((t): t is string => typeof t === 'string')
-        .map((t) => path.posix.normalize(path.posix.join(baseDir, t)));
       rules.push({ configDir, prefix, suffix, targets });
     }
   }
