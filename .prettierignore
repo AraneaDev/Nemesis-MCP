@@ -1,0 +1,17 @@
+# Files a release tool writes, which it will rewrite in its own style on every
+# release. Style-gating a generated file means every release pull request fails
+# lint for a reason no human introduced and no human can fix for good.
+#
+# `.release-please-manifest.json` is the concrete case: prettier wants
+# `{ ".": "0.2.0" }` and release-please writes `{".":"0.2.0"}`. The file was
+# hand-formatted when it was added, so main passed and the first release pull
+# request did not.
+.release-please-manifest.json
+CHANGELOG.md
+
+# Build output and coverage reports.
+dist/
+coverage/
+
+# Fixtures are deliberately malformed in places, which is the point of them.
+fixtures/
