@@ -1,269 +1,195 @@
+<div align="center">
+
 # Nemesis-MCP
 
-> *"Een stub voor een methode die allang niet meer bestaat, slaagt ook."*
-> (A stub for a method that no longer exists also passes.)
+**A mock outlives the code it stands for, and the suite goes green anyway.**
 
-Static contract-integrity inspection between **test doubles** (mocks, stubs,
-spies) and **production code** across multi-language repositories. Nemesis
-catches the most insidious failure mode of agent-written tests: a permanently
-green suite guarding phantom code.
+[![Release](https://img.shields.io/github/v/release/AraneaDev/Nemesis-MCP?label=release)](https://github.com/AraneaDev/Nemesis-MCP/releases)
+[![CI](https://img.shields.io/github/actions/workflow/status/AraneaDev/Nemesis-MCP/ci.yml?label=CI)](https://github.com/AraneaDev/Nemesis-MCP/actions/workflows/ci.yml)
+[![Coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FAraneaDev%2FNemesis-MCP%2Fgh-pages%2Fcoverage.json)](https://github.com/AraneaDev/Nemesis-MCP/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/AraneaDev/Nemesis-MCP?label=license&color=yellow)](./LICENSE)
+[![Language](https://img.shields.io/github/languages/top/AraneaDev/Nemesis-MCP)](https://github.com/AraneaDev/Nemesis-MCP)
+[![Last commit](https://img.shields.io/github/last-commit/AraneaDev/Nemesis-MCP?label=last%20commit)](https://github.com/AraneaDev/Nemesis-MCP/commits/main)
+[![Conventional Commits](https://img.shields.io/badge/commits-conventional-fe5196?logo=conventionalcommits&logoColor=white)](https://www.conventionalcommits.org/)
+[![Status](https://img.shields.io/badge/status-in%20development-orange)](#install)
 
-When an implementation signature changes, mocked unit tests keep passing
-because the mock — not the production code — defines the contract. Nemesis
-extracts doubles via AST analysis and checks them against the real
-classes/interfaces/traits. No tests are executed; results are deterministic.
+</div>
 
-## The Four Contract Violations
+> **Nemesis** (Νέμεσις) is the Greek goddess who deals out what is due. Her name comes from
+> _némein_, to apportion, and her business is proportion: she takes back what was claimed beyond its
+> warrant. A test double claims to stand in for something real. This tool checks whether it still
+> has the right to.
 
-| Type | Meaning |
-| --- | --- |
-| `GHOST_METHOD` | The double stubs a method that no longer exists on the target (includes "Did you mean …?" suggestions). |
-| `ARITY_MISMATCH` | The double passes more arguments than the method accepts, omits required ones, passes a literal of the wrong type for a declared parameter, or names an argument that matches no parameter. |
-| `RETURN_DRIFT` | The stubbed return value cannot satisfy the declared return type. Covers an object literal missing a required field or carrying one that no longer exists, an enum case the enum no longer has, a resolved value on a method that is not awaitable, and `willReturnSelf` on a method that is not fluent. |
-| `VISIBILITY_BREACH` | The double stubs a member it cannot legitimately replace: a `private`/`protected` method, a `final` method, a `final` class, a `static` method reached through an instance double, an accessor spied without an access type, or a PHP constructor. |
+**TL;DR:** Nemesis reads your test doubles and your production code, and reports every place a mock,
+stub or spy no longer matches the thing it replaces. It runs no tests. Nothing is executed, imported
+or booted, so the answer is the same every time you ask.
 
-Findings carry a confidence: `definite` (block-worthy) or `warning`
-(heuristic, e.g. dynamic targets).
+The failure it exists for is specific. When a signature changes, a mocked unit test keeps passing,
+because the mock defines the contract rather than the code does. The suite stays green while the
+thing it guards has moved. Agent-written tests reach that state faster than handwritten ones,
+because a generated mock records the shape of the code on the day it was generated and nothing ever
+revisits it.
 
-`definite` is reserved for what syntax alone can prove. Two differing *named*
-types are reported as `warning`, because the class that relates them normally
-lives in `vendor/` or `node_modules/`, which are never walked. A Python method
-with one leading underscore is a naming convention rather than access control,
-so stubbing it is a `warning`; only a name-mangled `__member` is a definite
-breach. A stubbed method whose name is not a literal, such as
-`shouldReceive($method)` inside a loop, names nothing checkable and is skipped
-entirely.
+> **Status:** pre-release. Nemesis-MCP is **not yet published to npm**. The source is public on
+> [GitHub](https://github.com/AraneaDev/Nemesis-MCP), so install from source, see
+> [Install](#install). Any `npm install -g` or `npx` line in this README describes the planned
+> published experience and does not work yet.
 
-## Supported Ecosystems
+**Contents:** [What it finds](#what-it-finds) · [Install](#install) · [Quick start](#quick-start) ·
+[Languages](#supported-ecosystems) · [Fixtures](#fixtures) · [Discovery](#discovery) ·
+[Suppression](#suppression) · [Development](#development)
 
-| Language | Frameworks | Patterns |
-| --- | --- | --- |
-| TypeScript / JS | Vitest, Jest | `vi.spyOn` / `jest.spyOn`, `vi.mocked` / `jest.mocked`, `mockReturnValue`, `mockResolvedValue`, `toHaveBeenCalledWith`, `toHaveBeenCalledTimes`, and the same setters and assertions applied directly to a typed receiver, including spies on a class's static members |
-| PHP | PHPUnit, Pest, Mockery | `createMock`, `createStub`, `getMockBuilder()->getMock()`, `expects()->method()`, `with()`, `willReturn*` including every value of `willReturnOnConsecutiveCalls`, `Mockery::mock`, `shouldReceive`, `andReturn*`, Pest `mock()` / `spy()` |
-| Python | pytest-mock, unittest.mock | `mocker.patch`, `patch`, `patch.object`, `create_autospec`, `Mock(spec=X)`, `return_value=`, `assert_called_with` |
-| Rust | mockall | `MockFoo::new()` / `MockFoo::default()` with `expect_<method>()`, arity from `.with(...)`, return values from `return_const(...)` and `returning(...)`, plus `#[automock]` and `mock! { }` declarations |
+---
 
-## Install & Run
+## What it finds
+
+Four violation types, and nothing else. The set is fixed on purpose: a checker that grows a category
+per bug becomes a checker nobody reads.
+
+| Type                | Meaning                                                                                                                                                                                                                                                                                        |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GHOST_METHOD`      | The double stubs a member that is not there any more, with a did-you-mean from edit distance. Also covers an imported target that the module no longer exports, and a module mock supplying a key the module does not have.                                                                    |
+| `ARITY_MISMATCH`    | The double passes more arguments than the method accepts, omits required ones, passes a literal of the wrong type, names an argument matching no parameter, or supplies a replacement function whose own signature the method no longer offers.                                                |
+| `RETURN_DRIFT`      | The pinned return value cannot satisfy the declared return type. Includes an object literal missing a required field or carrying a stale one, an enum case the enum no longer has, a promise handed back by a method that is not awaitable, and a fluent chain on a method that is not fluent. |
+| `VISIBILITY_BREACH` | The double replaces a member it cannot legitimately replace: a private or protected method, a final method, a final class, a static reached through an instance double, an accessor spied without an access type, or a PHP constructor.                                                        |
+
+Every finding carries a confidence. `definite` is what syntax alone can prove and is worth failing a
+build over. `warning` is a heuristic, and the difference is deliberate: two differing named types
+are only a warning, because the class relating them usually lives in `vendor/` or `node_modules/`,
+which are never walked. A Python method with one leading underscore is a naming convention rather
+than access control, so stubbing it warns; only a name-mangled `__member` is a definite breach. A
+stubbed method whose name is built at runtime, such as `shouldReceive($method)` inside a loop, names
+nothing checkable and is skipped entirely.
+
+**Where the evidence runs out, the answer is silence.** A warning that is wrong most of the time
+teaches people to ignore the tool, which costs more than the finding was worth.
+
+## Install
 
 ```bash
+git clone https://github.com/AraneaDev/Nemesis-MCP.git
+cd Nemesis-MCP
 npm install
-npm run build          # emits dist/
-node dist/cli/main.js audit   # or link the package to use `nemesis`
+npm run build
 ```
 
-### CLI
+That gives you two binaries, `nemesis` for the command line and `nemesis-mcp` for the MCP server.
+
+> **Planned, not available yet:** once published, this becomes `npm install -g nemesis-mcp`, or
+> `npx nemesis-mcp` on demand. Neither works until the package ships.
+
+## Quick start
 
 ```bash
-nemesis audit [paths...] [options]
-nemesis verify-symbol <SymbolName> [options]
-nemesis fixtures [paths...] [options]
+# Every double in the repository, checked against the code it stands for
+node dist/cli/main.js audit
+
+# One symbol, and the state of every double that names it
+node dist/cli/main.js verify-symbol PaymentGateway
+
+# JSON fixtures against the DTOs they are supposed to describe
+node dist/cli/main.js fixtures
 ```
 
-| Option | Meaning |
-| --- | --- |
-| `--json` | Machine-readable output instead of text. |
-| `--strictness=<mode>` | `all`, `untyped_only` or `breaking_only` (default). |
-| `--lang=<l1,l2>` | Restrict to some of `typescript, javascript, php, python, rust`. |
-| `--include=<path>` | Extra path to scan; repeatable. |
-| `--exclude=<dir>` | Directory name to skip; repeatable. |
-| `--allow-partial` | Do not fail merely because files were skipped. |
-| `-h, --help` / `-V, --version` | Help, version. |
+`audit` exits 0 when clean, 1 on a violation, and 2 when the scan could not complete, so it works as
+a pre-merge gate without further wiring. `--strictness=all` includes warnings,
+`--strictness=breaking_only` is the default, and `--allow-partial` accepts an incomplete scan
+knowingly rather than failing on it.
 
-An unknown command, an unknown option, an invalid strictness and an unknown
-language are all errors. None of them is silently ignored, because a dropped
-`--strictness` typo is a scan that passes for the wrong reason.
+The summary says how much of the scan it actually compared:
 
-`untyped_only` reports the cases where nothing could be verified: a test pins a
-concrete return value on a method that declares no return type. That is common
-in plain JavaScript and in unannotated Python, so it is a `warning` and never
-blocks the default run. `all` is exactly `breaking_only` plus `untyped_only`.
-
-### Exit codes
-
-| Code | Meaning |
-| --- | --- |
-| `0` | Clean scan, nothing to report. |
-| `1` | Violations found. `verify-symbol` uses this when any double no longer matches. |
-| `2` | Operational error, or a partial scan. |
-
-Audits enforce default limits of 10,000 discovered files, 2 MB per file,
-200 MB total input, and 120 seconds per audit. Files that are skipped or fail
-to parse appear as diagnostics in the summary and are always explained on
-stderr, so an exit 2 never arrives without a reason.
-
-A partial scan exits 2 rather than reporting clean, because a file the symbol
-graph never saw could be hiding a ghost method. When the gap is known and
-acceptable, for instance a repository that commits multi-megabyte generated
-seeders, `--allow-partial` falls back to the finding-based code. A file the
-walk could not read at all stays an exit 2 either way.
-
-### MCP Server
-
-```bash
-nemesis-mcp --serve    # stdio MCP server
+```
+Scanned 174 test file(s), inspected 4772 double(s).
+  2772 compared, 1521 unresolved, 475 with no contract to check.
 ```
 
-Three tools:
+That second line matters more than the first. A double whose target cannot be resolved was counted,
+not checked, and a clean result over mostly-unresolved doubles means the scan found nothing because
+it could see nothing.
 
-1. **`nemesis_audit`** — scan the repo (or `paths`) for drift.
-   Params: `paths?`, `strictness?`, `lang?`, `exclude?`.
-   Returns `{ summary: { scanned_test_files, doubles_inspected, violations_count }, violations: [...] }`.
-2. **`nemesis_verify_symbol`** — list every double pointing at a symbol and
-   whether each remains valid after your latest edit.
-   Params: `symbol` (e.g. `App\Services\InvoiceService` or `UserService`),
-   `strictness?`, `exclude?`. Returns the report plus
-   `summary: { doubles, invalid }` so an agent can branch without counting.
-3. **`nemesis_stale_fixtures`** — check JSON/YAML fixtures against current
-   DTO shapes (missing/renamed/removed fields, and fields whose value is the
-   wrong type). Strictness filtering is shared
-   with the CLI and supports `all`, `untyped_only`, and `breaking_only`.
-   Params: `paths?`, `strictness?`. Returns `unmatched_fixtures` alongside
-   `scanned_fixtures`, plus `unparsable_fixtures` when any fixture-shaped file
-   is not valid JSON or YAML.
-
-A failing scan comes back as a tool error with `isError`, rather than a
-transport-level rejection the agent cannot read.
-
-## What counts as a fixture
-
-`nemesis fixtures` only inspects JSON and YAML that lives where fixtures live:
-under `fixtures/`, `__fixtures__/`, `testdata/`, `__snapshots__/`,
-`cassettes/`, `stubs/`, `mocks/`, `factories/`, `seeds/`, `samples/`, or inside
-a test root. Configuration keeps its own identity wherever it sits, so
-`package.json`, `tsconfig*.json`, lockfiles, `docker-compose*.yml`, OpenAPI
-documents and anything under `.github/`, `.vscode/` or `.cursor/` are never
-treated as fixtures, even inside a test corpus.
-
-A fixture is bound to a DTO by name or by shape. A shape match needs at least
-three shared fields covering most of both the fixture and the DTO, because two
-shared keys is coincidence. A top-level key counts as a name only when it
-actually holds records: `{"users": [{...}]}` names `UserRecord`, while
-`{"edition": "2026-q1"}` is a string that happens to share a word with a class.
-
-A fixture that matches no DTO is counted, not reported: most fixtures describe
-no DTO at all. A fixture that will not parse is named in the summary and does
-not make the scan partial, because test corpora deliberately contain truncated
-and malformed files.
-
-Example `nemesis_audit` response:
+### As an MCP server
 
 ```json
 {
-  "summary": { "scanned_test_files": 42, "doubles_inspected": 187, "violations_count": 3 },
-  "violations": [
-    {
-      "file": "tests/Unit/BillingServiceTest.php",
-      "line": 54,
-      "type": "GHOST_METHOD",
-      "confidence": "definite",
-      "double_type": "PHPUnit_MockObject",
-      "target": "App\\Contracts\\PaymentGateway::chargeWithToken",
-      "message": "Method 'chargeWithToken' does not exist on 'App\\Contracts\\PaymentGateway'. Did you mean 'chargeToken'?",
-      "suggestion": "chargeToken"
+  "mcpServers": {
+    "nemesis": {
+      "command": "node",
+      "args": ["/absolute/path/to/Nemesis-MCP/dist/mcp/main.js"]
     }
-  ]
+  }
 }
 ```
 
-## Agent Workflow
+Three tools: `nemesis_audit` for a whole tree, `nemesis_verify_symbol` for one symbol before you
+change it, and `nemesis_stale_fixtures` for JSON and YAML fixtures against their DTOs.
 
-1. **Before an agent finishes a refactor** — call `nemesis_verify_symbol` on
-   the modified symbol to see which doubles need signature updates.
-2. **Pre-merge audit** — run `nemesis_audit` in CI or pre-commit (exit 1 fails
-   the check). Designed to run alongside Chaos-MCP and Momus-MCP.
+The useful habit for an agent is to call `nemesis_verify_symbol` before editing a class and
+`nemesis_audit` after, so a rename that stranded a mock is caught in the same turn that made it
+rather than in review.
+
+## Supported ecosystems
+
+| Language               | Frameworks                 | Patterns                                                                                                                                                                                                                                                                                                                                                   |
+| ---------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| TypeScript, JavaScript | Vitest, Jest               | `vi.spyOn` and `jest.spyOn`, `vi.mocked`, `vi.mock` with a factory, manual mocks in `__mocks__`, `mockReturnValue`, `mockResolvedValue`, `mockRejectedValue`, `mockImplementation`, `mockReturnThis`, `toHaveBeenCalledWith`, spies on statics and on `Klass.prototype`, and module members reached through a namespace or default import                  |
+| PHP                    | PHPUnit, Pest, Mockery     | `createMock`, `createStub`, `createConfiguredMock`, `createPartialMock`, `getMockBuilder()->onlyMethods()`, `getMockForAbstractClass`, `getMockForTrait`, `expects()->method()`, `with()`, every value of `willReturnOnConsecutiveCalls`, `willReturnCallback`, `Mockery::mock` including the `'Foo[a,b]'` partial form, `shouldReceive`, `andReturnUsing` |
+| Python                 | pytest-mock, unittest.mock | `mocker.patch`, `patch`, `patch.object`, `patch.multiple`, `create_autospec`, `Mock(spec=X)`, `return_value=`, `side_effect=` with a lambda, `assert_called_with`, and module attributes patched where they are used rather than where they are defined                                                                                                    |
+| Rust                   | mockall                    | `MockFoo::new()` and `::default()` with `expect_<method>()`, arity from `.with(...)`, return values from `return_const(...)` and `returning(...)`, plus `#[automock]` and `mock! { }` blocks                                                                                                                                                               |
+
+A module is a first-class target, not only a class. `patch("core.system.subprocess_runner.run")` and
+`vi.mock('../db.js', factory)` both resolve to the file they name, and a name that file imports is a
+member of it, because that is where Python convention says to patch it.
+
+## Fixtures
+
+`nemesis fixtures` compares JSON and YAML fixtures against the DTOs they describe: a missing
+required field, a field that no longer exists, a value of the wrong type, an enum case that was
+renamed, and the same questions asked again inside nested objects and arrays.
+
+A fixture is matched to a DTO by name or by shape overlap, and an ambiguous match is left alone.
+Config files, lock files and anything under a config directory are never treated as fixtures.
+
+## Discovery
+
+Zero configuration. Test files are found by the conventions each ecosystem already uses, and
+`.gitignore` is honoured, along with `.nemesisignore` if you add one. `node_modules`, `vendor`,
+`dist`, `build` and the rest are never walked. Symlinks are followed once, by real path, so a
+directory linked into its own tree cannot make the walk loop.
+
+Scans are bounded: 2 MB per file, 10,000 files, 200 MB in total and 120 seconds. Hitting a bound
+exits 2 rather than reporting a clean result over a partial read.
 
 ## Suppression
 
-Add a `nemesis-ignore` comment on the finding's line or the line above:
-
-```php
-$gateway->method('legacyName')->willReturn(1); // nemesis-ignore
+```ts
+// nemesis-ignore-next-line
+vi.spyOn(legacy, 'gone').mockReturnValue(true);
 ```
 
-## Discovery (zero-config)
+One line, one comment, no configuration file. A suppression that has to be found in a separate file
+is a suppression nobody revisits.
 
-Test roots: `tests/`, `test/`, `spec/`, `__tests__/`, `*.spec.*`, `*.test.*`,
-`*Test.php`, `test_*.py`, `tests/*.rs`, … Everything else with a known source
-extension is production code. `node_modules`, `vendor`, `dist`, `build`,
-`target`, etc. are always skipped.
-
-Symlinked directories are followed, because a repository that reaches its
-source through a link (pnpm workspaces, many monorepo layouts) would otherwise
-have that source missing from the graph and every double pointing into it
-silently unchecked. Directories are tracked by real path, so a link back to
-somewhere already walked, including the repository root, ends the descent
-instead of walking the tree twice.
-
-Rust is discovered differently from the rest: `tests/` and `benches/` are
-Cargo's test targets, `*_test.rs` and `test_*.rs` are tests by name, and a
-source file carrying a `#[cfg(test)]` module is scanned as both production and
-test, because that inline module is where most Rust unit tests live.
-
-The repository's own `.gitignore` is honoured as well, so generated trees
-(`var/cache/`, `build-electrobun/`, a linked `.worktrees/` checkout, a vendored
-`ref/` copy of someone else's source) are neither scanned nor counted twice.
-Nested `.gitignore` files are not read, only the one at the scan root. Pass
-`--exclude=<dir>` for anything else, including a repository's own intentionally
-broken drift fixtures:
+## Development
 
 ```bash
-nemesis audit --exclude=fixtures
+npm run typecheck
+npm run lint
+npm test
+npm run build
 ```
 
-### Same-named symbols
+Never pipe a gate into `grep` or `tail`. A pipe reports the exit status of the last command, so a
+failing gate reads as a passing one. That mistake shipped a commit through a red test suite during
+development, twice.
 
-A target is resolved against the language of the test that named it, then
-against the declaration closest to that test in the directory tree. A monorepo
-holding one `CatalogService` per package resolves each to its own package, and
-an SDK repo shipping a `UsageTracker` class in TypeScript, Python and PHP never
-checks a TypeScript test against the Python class. When neither rule settles it,
-the target is left unresolved and nothing is reported — Nemesis does not guess.
+Fixtures under `fixtures/experiments/` are deliberately broken, one directory per drift scenario,
+and each one is expected to produce exactly the findings its README comment describes.
 
-## Architecture
+## License
 
-```
-Test AST Parser ──► Double Manifest ┐
-                                    ├──► Drift Analyzer ──► JSON / MCP / CLI
-Production Indexer ──► Symbol Graph ┘
-```
+[MIT](LICENSE).
 
-- **parser/** — web-tree-sitter + per-grammar WASM (`@vscode/tree-sitter-wasm`),
-  lazily loaded; a grammar that fails to load skips its language gracefully.
-- **core/** — discovery, symbol graph (extends/implements/uses resolution),
-  drift analyzer, suppression, reporting.
-- **extractors/** — per-language production indexers and double extractors.
-- **fixtures/** — stale JSON/YAML fixture checker.
-- **mcp/** — stdio MCP server; **cli/** — the `nemesis` binary.
+---
 
-## Development and quality gates
-
-```bash
-npm run typecheck    # strict TypeScript contract check
-npm test             # unit + e2e + MCP smoke tests
-npm run lint         # Prettier source check + Markdown documentation lint
-npm run test:coverage     # focused V8 gate with high thresholds
-npm run test:coverage:all  # whole-source visibility report
-npm run quality            # lint + both coverage reports: the CI/pre-merge gate
-npm run format       # apply the repository formatting policy locally
-```
-
-The focused coverage gate requires at least **90% lines, functions, and statements** and
-**77% branches** for deterministic core helpers (`ignore`, `report`, and
-`symbolGraph`). `npm run test:coverage:all` reports every production module
-and enforces a baseline floor of 15% lines, functions, and statements (10%
-branches); this whole-pipeline floor is raised as extractor and operational-path
-tests are added. CLI/MCP subprocess behavior is covered by the e2e and smoke
-suites.
-
-Fixture repositories under `fixtures/` exercise every violation type in every
-ecosystem. Fixture checking supports field metadata from TypeScript interfaces,
-type aliases, and class properties, PHP properties, Python class attributes,
-and Rust struct fields; unsupported or ambiguous shapes are reported as
-diagnostics rather than treated as clean. `fixtures/experiments/` contains three focused experiments per
-supported language (TypeScript/Vitest, JavaScript/Jest, PHP/PHPUnit-Mockery-Pest,
-Python/unittest.mock, and Rust/mockall). `fixtures/dogfood-repo` is a
-repository-shaped TypeScript example with stale doubles, while
-`fixtures/dogfood-clean` proves the clean path. They are static-analysis inputs,
-not runnable tests.
-
-See `docs/SPEC.md` (specification) and `docs/PLAN.md` (implementation plan).
+Built by [Tim Schipper](https://tim-schipper.nl/en) and released as open source under
+[Aranea Development](https://aranea-development.nl).

@@ -1,0 +1,122 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Least privilege by default: these jobs only read the repository. The one job
+# that needs more, publishing the coverage badge, raises it for itself.
+permissions:
+  contents: read
+
+# One run per branch. A second push cancels the first, because whoever pushed
+# again has already answered the question the running job was asked.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    name: Check (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [24.x, 26.x]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # A release-please pull request changes version files, the manifest and a
+      # changelog entry, which none of these steps can disagree with. They run
+      # anyway. Every lane branch protection requires has to run on every pull
+      # request, release-please's included: a skipped job reports under its
+      # unexpanded matrix name, never satisfies the rule, and leaves the release
+      # blocked for good. Re-running over a byte-identical tree costs minutes;
+      # a release that cannot merge costs the release.
+      - name: Set up Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      # Never `npm run lint | tail` or `| grep`: a pipe reports the exit status
+      # of the last command, so a failing gate reads as a passing one. This bit
+      # twice during development, once shipping a commit through a red lint.
+      - name: Lint
+        if: ${{ always() }}
+        run: npm run lint
+
+      - name: Test
+        if: ${{ always() }}
+        run: npm test
+
+      - name: Build
+        if: ${{ always() }}
+        run: npm run build
+
+      # The tool has to survive being pointed at itself. This is the same sweep
+      # the development process runs against every repository on a workstation,
+      # narrowed to the one repository CI has.
+      - name: Audit this repository with its own build
+        if: ${{ always() }}
+        run: node dist/cli/main.js audit --allow-partial || true
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write # publishes the coverage badge to the gh-pages branch
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24.x
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Test with coverage
+        run: npm run test:coverage
+
+      # The percentage is published as a shields endpoint on an orphan
+      # gh-pages branch, force-pushed so it stays one commit and never grows a
+      # history. Only on main, because a pull request must not move the badge.
+      - name: Publish coverage badge
+        if: github.ref == 'refs/heads/main'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          pct=$(node -e "const s=require('./coverage/coverage-summary.json');console.log(Math.round(s.total.lines.pct))" 2>/dev/null || echo 0)
+          colour=red
+          [ "$pct" -ge 60 ] && colour=orange
+          [ "$pct" -ge 75 ] && colour=yellow
+          [ "$pct" -ge 90 ] && colour=brightgreen
+          mkdir -p /tmp/badge
+          printf '{"schemaVersion":1,"label":"coverage","message":"%s%%","color":"%s"}\n' "$pct" "$colour" > /tmp/badge/coverage.json
+          cat /tmp/badge/coverage.json
+          cd /tmp/badge
+          git init -q
+          git checkout -q -b gh-pages
+          git add coverage.json
+          git -c user.name='github-actions[bot]' \
+              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              commit -q -m 'chore: publish coverage badge'
+          git push -q --force \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gh-pages
