@@ -82,22 +82,49 @@ describe('the module symbol for a TypeScript file', () => {
     expect(m.methods.has('fetchUser')).toBe(false);
   });
 
-  it('holds a name it imports, with where it came from', async () => {
+  it('does not treat a plain named import as a member of this file', async () => {
+    // An import is not an export: TypeScript does not make `query` an
+    // attribute of `repo.ts` just because the file imports it. Unlike
+    // Python, where `from x import y` really does bind `y` on the importing
+    // module, this is a purely local binding until something re-exports it.
     const m = await moduleOf("import { query } from './db.js';\n", 'src/repo.ts');
-    expect(m.imports?.get('query')).toEqual({ from: './db.js', name: 'query' });
-    expect(m.unknownMembers.has('query')).toBe(true);
+    expect(m.imports?.has('query')).toBe(false);
+    expect(m.unknownMembers.has('query')).toBe(false);
   });
 
-  it('binds an aliased import under the alias', async () => {
+  it('does not treat an aliased import as a member of this file', async () => {
     const m = await moduleOf("import { query as q } from './db.js';\n", 'src/repo.ts');
-    expect(m.imports?.get('q')).toEqual({ from: './db.js', name: 'query' });
+    expect(m.imports?.has('q')).toBe(false);
+    expect(m.unknownMembers.has('q')).toBe(false);
+  });
+
+  it('does not treat a default import as a member of this file', async () => {
+    const m = await moduleOf("import db from './db.js';\n", 'src/repo.ts');
+    expect(m.imports?.has('db')).toBe(false);
+    expect(m.unknownMembers.has('db')).toBe(false);
+  });
+
+  it('delegates a re-exported imported name to the module it came from', async () => {
+    const m = await moduleOf(
+      "import { query } from './db.js';\nexport { query };\n",
+      'src/repo.ts',
+    );
+    expect(m.imports?.get('query')).toEqual({ from: './db.js', name: 'query' });
+    expect(m.unknownMembers.has('query')).toBe(false);
+  });
+
+  it('delegates an aliased re-export of an imported name', async () => {
+    const m = await moduleOf(
+      "import { query } from './db.js';\nexport { query as fetch };\n",
+      'src/repo.ts',
+    );
+    expect(m.imports?.get('fetch')).toEqual({ from: './db.js', name: 'query' });
     expect(m.imports?.has('query')).toBe(false);
   });
 
-  it('binds a default import under its local name', async () => {
-    const m = await moduleOf("import db from './db.js';\n", 'src/repo.ts');
-    expect(m.imports?.get('db')).toEqual({ from: './db.js', name: 'default' });
-    expect(m.unknownMembers.has('db')).toBe(true);
+  it('delegates a re-export with a source specifier to the module it names', async () => {
+    const m = await moduleOf("export { query } from './db.js';\n", 'src/repo.ts');
+    expect(m.imports?.get('query')).toEqual({ from: './db.js', name: 'query' });
   });
 
   it('binds a namespace import under the namespace name, not as an import', async () => {
