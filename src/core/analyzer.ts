@@ -21,6 +21,7 @@ import {
   similarity,
   suggestMember,
 } from './symbolGraph.js';
+import type { ResolveHint } from './symbolGraph.js';
 import { languageForFile } from './discovery.js';
 import { isTsAliasSpecifier, resolveModule } from './moduleResolve.js';
 import { PYTHON_BUILTINS } from './pythonBuiltins.js';
@@ -135,6 +136,66 @@ export function isUntypedSide(type: string | null | undefined): boolean {
   return t === '' || /^(mixed|any|unknown)$/i.test(t);
 }
 
+/**
+ * A synthetic module-shaped stand-in for a default export whose type this
+ * scan could not follow (a call, a conditional, an object literal, an
+ * anonymous class, and so on). Every member is opaque, so `classify` never
+ * reports a ghost off it, but it is not null: the double still counted as
+ * reached, because something real was found, and the analyzer had a real
+ * question to ask of it. It just could not answer with a member list.
+ */
+function opaqueDefaultExport(mod: TypeSymbol): TypeSymbol {
+  return {
+    name: mod.name,
+    file: mod.file,
+    kind: 'module',
+    methods: new Map(),
+    unknownMembers: new Set(['*']),
+    extends: [],
+    implements: [],
+    uses: [],
+    line: mod.line,
+  };
+}
+
+/**
+ * The type `d.targetSymbol` ultimately names, following a default-import
+ * binding to what the module actually default-exports rather than to the
+ * module itself.
+ *
+ * A default import binds the module's default EXPORT, not the module:
+ * `import authService from './auth.service'` names whatever `export
+ * default` in that file names, which is usually a class instance and never
+ * a top-level member of the module. Resolving it as the module and
+ * comparing configured members against the module's own top-level names
+ * reported every instance method as a ghost — the module never had a
+ * 'login', only an 'authService' whose class does. A namespace import (or
+ * `require`) genuinely does bind the module, so that case resolves exactly
+ * as before.
+ */
+function resolveDoubleType(
+  d: TestDouble,
+  graph: SymbolGraph,
+  hint: ResolveHint,
+): TypeSymbol | null {
+  const direct = resolveType(graph, d.targetSymbol!, hint);
+  if (direct) return direct;
+
+  if (d.moduleBinding !== 'default') {
+    return resolveModule(graph, d.targetSymbol!, d.file);
+  }
+
+  const mod = resolveModule(graph, d.targetSymbol!, d.file);
+  if (!mod) return null;
+  if (mod.defaultExportType) {
+    const exported = resolveType(graph, mod.defaultExportType, { ...hint, fromFile: mod.file });
+    if (exported) return exported;
+  }
+  // The module resolved and default-exports something, but this scan could
+  // not follow that export to a declared type. Silence beats a guess.
+  return opaqueDefaultExport(mod);
+}
+
 function classify(
   d: TestDouble,
   graph: SymbolGraph,
@@ -165,8 +226,7 @@ function classify(
   // which used to turn the module path `core.webhook.manager` into the
   // unrelated class `Webhook` and report every function in it as a ghost.
   const type =
-    resolveType(graph, d.targetSymbol, hint) ??
-    resolveModule(graph, d.targetSymbol, d.file) ??
+    resolveDoubleType(d, graph, hint) ??
     (methodNames.length === 0 ? (resolveTarget(graph, d.targetSymbol, hint)?.type ?? null) : null);
   if (!type) {
     const gone = importedButGone(d, lines, symbolsByFile, graph.exportsByFile);
@@ -652,8 +712,7 @@ function countDouble(d: TestDouble, graph: SymbolGraph, stats: AnalyzeStats): vo
     return;
   }
   const hint = { language: d.language, fromFile: d.file };
-  const reached =
-    resolveType(graph, d.targetSymbol, hint) ?? resolveModule(graph, d.targetSymbol, d.file);
+  const reached = resolveDoubleType(d, graph, hint);
   if (reached) {
     stats.checked += 1;
     return;
@@ -666,13 +725,14 @@ function countDouble(d: TestDouble, graph: SymbolGraph, stats: AnalyzeStats): vo
   // `isUnknowableTarget`'s guess from the text alone, because the binding
   // came from an actual import in the file, not from an identifier that
   // merely looks like a package name. Resolution (above, including through a
-  // path alias) already had its shot; a specifier that merely looks like an
-  // alias but did not resolve stays unresolved rather than being written off,
-  // because it may still be a real gap (a deleted file, say) rather than
-  // nothing to check. A relative specifier always stays resolvable, never
-  // unknowable, which resolution above already covers.
+  // path alias and, for a default binding, through its default export)
+  // already had its shot; a specifier that merely looks like an alias but
+  // did not resolve stays unresolved rather than being written off, because
+  // it may still be a real gap (a deleted file, say) rather than nothing to
+  // check. A relative specifier always stays resolvable, never unknowable,
+  // which resolution above already covers.
   if (
-    d.targetIsModule &&
+    d.moduleBinding &&
     !d.targetSymbol.startsWith('.') &&
     !isTsAliasSpecifier(graph, d.targetSymbol, d.file)
   ) {

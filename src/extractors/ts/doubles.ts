@@ -25,8 +25,10 @@ interface SpyRecord {
   returnsSelf?: boolean;
   staticReceiver?: boolean | undefined;
   /** `target` was reached through the module binding map, not taken at face value. */
-  targetIsModule?: boolean;
+  moduleBinding?: 'namespace' | 'default';
 }
+
+type ModuleVars = Map<string, { specifier: string; kind: 'namespace' | 'default' }>;
 
 function memberCall(
   node: SyntaxNode,
@@ -77,13 +79,13 @@ function initTypeName(init: SyntaxNode): string | null {
 function spyTargetOf(
   spyCall: SyntaxNode,
   varTypes: Map<string, string>,
-  moduleVars: Map<string, string>,
+  moduleVars: ModuleVars,
 ): {
   target: string | null;
   method: string | null;
   accessType: string | null;
   staticReceiver?: boolean | undefined;
-  targetIsModule?: boolean;
+  moduleBinding?: 'namespace' | 'default';
 } {
   const args = field(spyCall, 'arguments');
   if (!args) return { target: null, method: null, accessType: null };
@@ -94,7 +96,7 @@ function spyTargetOf(
   // Whether the spy was pointed at the class itself or at an instance of it.
   // Left undefined where neither is clear, such as `this.svc` or `a.b.c`.
   let staticReceiver: boolean | undefined;
-  let targetIsModule = false;
+  let moduleBinding: 'namespace' | 'default' | undefined;
   if (first.type === 'identifier') {
     // A tracked variable names its type; anything else is taken at face value,
     // which is how `vi.spyOn(Svc, 'build')` reaches the class's static member.
@@ -104,14 +106,18 @@ function spyTargetOf(
     // that is the behaviour this tool has always had, and it confines the new
     // module capability to identifiers with no competing local binding.
     const known = varTypes.get(first.text);
-    const asModule = moduleVars.get(first.text);
+    const bound = moduleVars.get(first.text);
     if (known !== undefined) {
       target = known;
       staticReceiver = false;
-    } else if (asModule) {
-      target = asModule;
-      staticReceiver = undefined; // a module has no instance side
-      targetIsModule = true;
+    } else if (bound) {
+      target = bound.specifier;
+      moduleBinding = bound.kind;
+      // A namespace import (or `require`) names the module, which has no
+      // instance side. A default import names the module's default export,
+      // which resolves to a class and is always spied on as an instance:
+      // `vi.spyOn(x, 'm')` never means "the static side of x's class".
+      staticReceiver = bound.kind === 'default' ? false : undefined;
     } else {
       target = first.text;
       staticReceiver = true;
@@ -140,7 +146,7 @@ function spyTargetOf(
     method,
     accessType,
     staticReceiver,
-    ...(targetIsModule ? { targetIsModule } : {}),
+    ...(moduleBinding ? { moduleBinding } : {}),
   };
 }
 
@@ -340,10 +346,19 @@ export async function extractTsDoubles(
     if (t) varTypes.set(name.text, t);
   }
 
-  // Pass 1b: identifiers bound to a whole module. `varTypes` only tracks
-  // `new X()`, so `import * as db` and `const db = require(...)` named nothing
-  // and every double through them resolved to a class called `db`.
-  const moduleVars = new Map<string, string>();
+  // Pass 1b: identifiers bound to a whole module or to a module's default
+  // export. `varTypes` only tracks `new X()`, so `import * as db`,
+  // `import x from './x'` and `const db = require(...)` named nothing and
+  // every double through them resolved to a class called `db` or `x`.
+  //
+  // A namespace import and `require` both bind the module itself: `db.query`
+  // means "the `query` member of this module". A default import binds the
+  // module's default EXPORT instead: `x.query` in `import x from './x'`
+  // means "the `query` member of whatever `./x` default-exports", which is
+  // usually a class instance and never a top-level member of the module.
+  // The two need different resolution, so the binding kind travels with the
+  // specifier rather than being collapsed into one map.
+  const moduleVars: ModuleVars = new Map();
   for (const { node } of walk(root)) {
     if (node.type === 'import_statement') {
       const from = node.namedChildren.find((c) => c.type === 'string');
@@ -353,9 +368,9 @@ export async function extractTsDoubles(
       for (const part of clause.namedChildren) {
         if (part.type === 'namespace_import') {
           const alias = part.namedChildren.find((c) => c.type === 'identifier');
-          if (alias) moduleVars.set(alias.text, specifier);
+          if (alias) moduleVars.set(alias.text, { specifier, kind: 'namespace' });
         } else if (part.type === 'identifier') {
-          moduleVars.set(part.text, specifier);
+          moduleVars.set(part.text, { specifier, kind: 'default' });
         }
       }
       continue;
@@ -366,7 +381,10 @@ export async function extractTsDoubles(
     if (name?.type !== 'identifier' || value?.type !== 'call_expression') continue;
     if (field(value, 'function')?.text !== 'require') continue;
     const arg = field(value, 'arguments')?.namedChildren[0];
-    if (arg?.type === 'string') moduleVars.set(name.text, unquote(arg.text));
+    // `const db = require('./db')` binds the module object itself, the same
+    // as a namespace import.
+    if (arg?.type === 'string')
+      moduleVars.set(name.text, { specifier: unquote(arg.text), kind: 'namespace' });
   }
 
   // Pass 2: spy creations (`vi.spyOn(...)`, possibly assigned to a variable).
@@ -380,7 +398,7 @@ export async function extractTsDoubles(
     if (!call || call.property !== 'spyOn') continue;
     const rootName = apiRoot(call);
     if (!rootName) continue;
-    const { target, method, accessType, staticReceiver, targetIsModule } = spyTargetOf(
+    const { target, method, accessType, staticReceiver, moduleBinding } = spyTargetOf(
       node,
       varTypes,
       moduleVars,
@@ -391,7 +409,7 @@ export async function extractTsDoubles(
       method,
       accessType,
       staticReceiver,
-      ...(targetIsModule ? { targetIsModule } : {}),
+      ...(moduleBinding ? { moduleBinding } : {}),
       line: node.startPosition.row + 1,
       returnTypeHint: null,
       returnExpr: null,
@@ -557,7 +575,7 @@ export async function extractTsDoubles(
       ...(rec.accessType ? { accessType: rec.accessType } : {}),
       ...(rec.returnsSelf ? { returnsSelf: true } : {}),
       ...(rec.staticReceiver !== undefined ? { staticReceiver: rec.staticReceiver } : {}),
-      ...(rec.targetIsModule ? { targetIsModule: true } : {}),
+      ...(rec.moduleBinding ? { moduleBinding: rec.moduleBinding } : {}),
       confidence: rec.target ? 'definite' : 'warning',
     });
   }
@@ -575,7 +593,7 @@ export async function extractTsDoubles(
 function adoptTypedMember(
   node: SyntaxNode,
   varTypes: Map<string, string>,
-  moduleVars: Map<string, string>,
+  moduleVars: ModuleVars,
   spies: SpyRecord[],
 ): SpyRecord | null {
   const fn = field(node, 'function');
@@ -613,26 +631,27 @@ function adoptTypedMember(
   const property = field(receiver, 'property')?.text;
   if (base?.type !== 'identifier' || !property) return null;
 
-  // A module binding names a module; a tracked constructor names a class.
-  // Only the first of these existed, so `vi.mocked(db.query)` found nothing.
-  // Both maps come from one flat, scope-blind walk, so a local binding that
-  // shadows a module import appears in both; `varTypes` wins, matching the
-  // precedence in spyTargetOf and the behaviour this tool had before modules
-  // were tracked at all.
+  // A module binding names a module (or, for a default import, the module's
+  // default export); a tracked constructor names a class. Only the first of
+  // these existed, so `vi.mocked(db.query)` found nothing. Both maps come
+  // from one flat, scope-blind walk, so a local binding that shadows a
+  // module import appears in both; `varTypes` wins, matching the precedence
+  // in spyTargetOf and the behaviour this tool had before modules were
+  // tracked at all.
   const known = varTypes.get(base.text);
-  const asModule = known === undefined ? moduleVars.get(base.text) : undefined;
-  const target = known ?? asModule;
+  const bound = known === undefined ? moduleVars.get(base.text) : undefined;
+  const target = known ?? bound?.specifier;
   if (!target) return null;
 
   const rec: SpyRecord = {
-    framework: asModule ? 'module member' : 'typed member',
+    framework: bound ? 'module member' : 'typed member',
     target,
     method: property,
     line: receiver.startPosition.row + 1,
     returnTypeHint: null,
     returnExpr: null,
     assertedArity: null,
-    ...(asModule ? { targetIsModule: true } : {}),
+    ...(bound ? { moduleBinding: bound.kind } : {}),
   };
   spies.push(rec);
   return rec;
