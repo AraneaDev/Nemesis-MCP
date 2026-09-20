@@ -125,3 +125,46 @@ describe('a manual mock in a __mocks__ directory', () => {
     ).toEqual([]);
   });
 });
+
+describe('the values a module mock factory supplies', () => {
+  it('reads an inline fake as a double on that member', async () => {
+    const { doubles } = await extractTsDoubles(
+      'tests/a.test.ts',
+      `vi.mock('../src/api', () => ({ isEnabled: vi.fn(() => true) }));`,
+      'typescript',
+    );
+    const member = doubles.find((d) => d.method === 'isEnabled');
+    expect(member?.targetSymbol).toBe('../src/api');
+    expect(member?.returnExpr).toBe('true');
+  });
+
+  it('reads a pinned return value off a factory value', async () => {
+    const { doubles } = await extractTsDoubles(
+      'tests/a.test.ts',
+      `vi.mock('../src/api', () => ({ createTables: vi.fn().mockResolvedValue(undefined) }));`,
+      'typescript',
+    );
+    const member = doubles.find((d) => d.method === 'createTables');
+    expect(member?.resolvedReturn).toBe(true);
+  });
+
+  it('reads the parameters an inline fake declares', async () => {
+    const { doubles } = await extractTsDoubles(
+      'tests/a.test.ts',
+      `vi.mock('../src/api', () => ({ send: vi.fn((to: string, subject: boolean) => true) }));`,
+      'typescript',
+    );
+    const member = doubles.find((d) => d.method === 'send');
+    expect(member?.fakeArity).toBe(2);
+    expect(member?.fakeParamTypes).toEqual(['string', 'boolean']);
+  });
+
+  it('still reports a key the module does not export', async () => {
+    // Check 28's behaviour must not regress.
+    const found = await run(
+      `vi.mock('../src/api', () => ({ fetchUser: vi.fn(), getUser: vi.fn() }));`,
+      EXPORTS,
+    );
+    expect(found[0]?.message).toContain("supplies 'getUser', which that module does not export");
+  });
+});
