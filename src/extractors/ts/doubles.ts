@@ -75,6 +75,7 @@ function initTypeName(init: SyntaxNode): string | null {
 function spyTargetOf(
   spyCall: SyntaxNode,
   varTypes: Map<string, string>,
+  moduleVars: Map<string, string>,
 ): {
   target: string | null;
   method: string | null;
@@ -95,8 +96,14 @@ function spyTargetOf(
     // which is how `vi.spyOn(Svc, 'build')` reaches the class's static member.
     // An identifier that names nothing in the graph simply fails to resolve.
     const known = varTypes.get(first.text);
-    target = known ?? first.text;
-    staticReceiver = known === undefined;
+    const asModule = moduleVars.get(first.text);
+    if (asModule) {
+      target = asModule;
+      staticReceiver = undefined; // a module has no instance side
+    } else {
+      target = known ?? first.text;
+      staticReceiver = known === undefined;
+    }
   } else if (first.type === 'member_expression' || first.type === 'this') {
     target = first.text;
     // `Klass.prototype` is the instance side of the class, and the usual way
@@ -241,6 +248,35 @@ export async function extractTsDoubles(
     if (t) varTypes.set(name.text, t);
   }
 
+  // Pass 1b: identifiers bound to a whole module. `varTypes` only tracks
+  // `new X()`, so `import * as db` and `const db = require(...)` named nothing
+  // and every double through them resolved to a class called `db`.
+  const moduleVars = new Map<string, string>();
+  for (const { node } of walk(root)) {
+    if (node.type === 'import_statement') {
+      const from = node.namedChildren.find((c) => c.type === 'string');
+      const clause = node.namedChildren.find((c) => c.type === 'import_clause');
+      if (!from || !clause) continue;
+      const specifier = unquote(from.text);
+      for (const part of clause.namedChildren) {
+        if (part.type === 'namespace_import') {
+          const alias = part.namedChildren.find((c) => c.type === 'identifier');
+          if (alias) moduleVars.set(alias.text, specifier);
+        } else if (part.type === 'identifier') {
+          moduleVars.set(part.text, specifier);
+        }
+      }
+      continue;
+    }
+    if (node.type !== 'variable_declarator') continue;
+    const name = field(node, 'name');
+    const value = field(node, 'value');
+    if (name?.type !== 'identifier' || value?.type !== 'call_expression') continue;
+    if (field(value, 'function')?.text !== 'require') continue;
+    const arg = field(value, 'arguments')?.namedChildren[0];
+    if (arg?.type === 'string') moduleVars.set(name.text, unquote(arg.text));
+  }
+
   // Pass 2: spy creations (`vi.spyOn(...)`, possibly assigned to a variable).
   const spies: SpyRecord[] = [];
   const byCall = new Map<number, SpyRecord>();
@@ -252,7 +288,7 @@ export async function extractTsDoubles(
     if (!call || call.property !== 'spyOn') continue;
     const rootName = apiRoot(call);
     if (!rootName) continue;
-    const { target, method, accessType, staticReceiver } = spyTargetOf(node, varTypes);
+    const { target, method, accessType, staticReceiver } = spyTargetOf(node, varTypes, moduleVars);
     const rec: SpyRecord = {
       framework: `${rootName}.spyOn`,
       target,
@@ -292,7 +328,9 @@ export async function extractTsDoubles(
     const obj = field(call.fn, 'object');
     const byVar = obj?.type === 'identifier' ? spyVars.get(obj.text) : undefined;
     const rec =
-      byVar ?? findOwningSpy(node, byCall, spyVars) ?? adoptTypedMember(node, varTypes, spies);
+      byVar ??
+      findOwningSpy(node, byCall, spyVars) ??
+      adoptTypedMember(node, varTypes, moduleVars, spies);
     if (!rec) continue;
 
     if (isSelf) {
@@ -410,6 +448,7 @@ export async function extractTsDoubles(
 function adoptTypedMember(
   node: SyntaxNode,
   varTypes: Map<string, string>,
+  moduleVars: Map<string, string>,
   spies: SpyRecord[],
 ): SpyRecord | null {
   const fn = field(node, 'function');
@@ -447,11 +486,14 @@ function adoptTypedMember(
   const property = field(receiver, 'property')?.text;
   if (base?.type !== 'identifier' || !property) return null;
 
-  const target = varTypes.get(base.text);
+  // A module binding names a module; a tracked constructor names a class.
+  // Only the first of these existed, so `vi.mocked(db.query)` found nothing.
+  const asModule = moduleVars.get(base.text);
+  const target = asModule ?? varTypes.get(base.text);
   if (!target) return null;
 
   const rec: SpyRecord = {
-    framework: 'typed member',
+    framework: asModule ? 'module member' : 'typed member',
     target,
     method: property,
     line: receiver.startPosition.row + 1,

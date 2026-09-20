@@ -140,3 +140,43 @@ describe('the other two chain setters', () => {
     expect(d?.returnsSelf).toBe(true);
   });
 });
+
+describe('a receiver that is a module', () => {
+  it('reads a namespace import as the module it names', async () => {
+    const [d] = await doubles(
+      `import * as db from '../src/db.js';\nvi.spyOn(db, 'query').mockReturnValue(1);`,
+    );
+    expect(d?.targetSymbol).toBe('../src/db.js');
+    expect(d?.method).toBe('query');
+  });
+
+  it('reads a default import as the module it names', async () => {
+    const [d] = await doubles(
+      `import db from '../src/db.js';\nvi.spyOn(db, 'query').mockReturnValue(1);`,
+    );
+    expect(d?.targetSymbol).toBe('../src/db.js');
+  });
+
+  it('reads a require binding as the module it names', async () => {
+    const [d] = await doubles(
+      `const db = require('../src/db.js');\nvi.spyOn(db, 'query').mockReturnValue(1);`,
+    );
+    expect(d?.targetSymbol).toBe('../src/db.js');
+  });
+
+  it('reaches a member configured through vi.mocked', async () => {
+    // adoptTypedMember documents this as supported and then bails, because it
+    // requires the receiver to be a tracked constructor.
+    const [d] = await doubles(
+      `import * as db from '../src/db.js';\nvi.mocked(db.query).mockReturnValue(1);`,
+    );
+    expect(d?.targetSymbol).toBe('../src/db.js');
+    expect(d?.method).toBe('query');
+    expect(d?.returnExpr).toBe('1');
+  });
+
+  it('leaves a constructed instance alone', async () => {
+    const [d] = await doubles(`${PRELUDE}vi.spyOn(s, 'load').mockReturnValue(1);`);
+    expect(d?.targetSymbol).toBe('Svc');
+  });
+});
