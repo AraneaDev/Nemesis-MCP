@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { addModule, emptyGraph } from '../../src/core/symbolGraph.js';
 import { resolveModule } from '../../src/core/moduleResolve.js';
-import type { SymbolGraph, TypeSymbol } from '../../src/core/types.js';
+import type { SymbolGraph, TsPathAlias, TypeSymbol } from '../../src/core/types.js';
 
 function mod(file: string): TypeSymbol {
   return {
@@ -69,5 +69,46 @@ describe('finding the module a target names', () => {
   it('says nothing about a package specifier', () => {
     const g = graphWith('src/db.ts');
     expect(resolveModule(g, 'some-package', 'tests/a.test.ts')).toBeNull();
+  });
+});
+
+describe('TypeScript path aliases', () => {
+  function alias(
+    rule: Partial<TsPathAlias> & Pick<TsPathAlias, 'prefix' | 'targets'>,
+  ): TsPathAlias {
+    return { configDir: '.', suffix: '', ...rule };
+  }
+
+  it('resolves "@/services/x" through "@/*": ["./src/*"] to src/services/x.ts', () => {
+    const g = graphWith('src/services/admin.service.ts');
+    g.tsPathAliases = [alias({ prefix: '@/', targets: ['src/*'] })];
+    expect(resolveModule(g, '@/services/admin.service', 'tests/a.test.ts')?.file).toBe(
+      'src/services/admin.service.ts',
+    );
+  });
+
+  it('resolves an alias in a nested tsconfig relative to that directory', () => {
+    // frontend/tsconfig.json declares "@/*": ["./src/*"], relative to
+    // frontend/, not the repository root.
+    const g = graphWith('frontend/src/services/auth.service.ts', 'backend/src/auth.service.ts');
+    g.tsPathAliases = [alias({ configDir: 'frontend', prefix: '@/', targets: ['frontend/src/*'] })];
+    expect(
+      resolveModule(g, '@/services/auth.service', 'frontend/tests/unit/authStore.test.ts')?.file,
+    ).toBe('frontend/src/services/auth.service.ts');
+    // A file outside frontend/ is not covered by frontend's tsconfig, so the
+    // same alias specifier resolves to nothing from there.
+    expect(resolveModule(g, '@/services/auth.service', 'backend/tests/t.test.ts')).toBeNull();
+  });
+
+  it('resolves to nothing when the alias maps to two targets', () => {
+    const g = graphWith('src/services/admin.service.ts');
+    g.tsPathAliases = [alias({ prefix: '@/', targets: ['src/*', 'legacy/*'] })];
+    expect(resolveModule(g, '@/services/admin.service', 'tests/a.test.ts')).toBeNull();
+  });
+
+  it('resolves to nothing when the alias matches no scanned file', () => {
+    const g = graphWith('src/services/admin.service.ts');
+    g.tsPathAliases = [alias({ prefix: '@/', targets: ['src/*'] })];
+    expect(resolveModule(g, '@/services/deleted-service', 'tests/a.test.ts')).toBeNull();
   });
 });

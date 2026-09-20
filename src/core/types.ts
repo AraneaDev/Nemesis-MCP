@@ -100,6 +100,25 @@ export interface SymbolGraph {
   modules: Map<string, TypeSymbol>;
   /** Languages whose grammars failed to load; reported in the summary. */
   skippedLanguages: LanguageId[];
+  /**
+   * TypeScript `paths` aliases read from every `tsconfig.json` in the
+   * repository, once per scan. Empty when none were found or none parsed.
+   */
+  tsPathAliases: TsPathAlias[];
+}
+
+/**
+ * One resolved `paths` entry from a `tsconfig.json`, scoped to the directory
+ * that declared it. `prefix`/`suffix` are the pattern split on its `*`
+ * (`suffix` is `''` for a pattern with no wildcard); `targets` are the
+ * repo-relative destination patterns, still carrying `*`, already resolved
+ * against that tsconfig's own directory and `baseUrl`.
+ */
+export interface TsPathAlias {
+  configDir: string;
+  prefix: string;
+  suffix: string;
+  targets: string[];
 }
 
 /** A test double found in a test file. */
