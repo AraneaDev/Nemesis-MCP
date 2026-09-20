@@ -549,7 +549,9 @@ export async function extractTsDoubles(
     const call = memberCall(node);
     if (!call || !/^(mock|doMock)$/.test(call.property)) continue;
     if (!apiRoot(call)) continue;
-    const args = call.argsNode?.namedChildren ?? [];
+    // A comment is a named child of the argument list, so a specifier written
+    // under one would be read from the wrong position.
+    const args = (call.argsNode?.namedChildren ?? []).filter((a) => a.type !== 'comment');
     const line = node.startPosition.row + 1;
     const specifierNode = args[0];
     if (!specifierNode || specifierNode.type !== 'string') {

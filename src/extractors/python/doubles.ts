@@ -138,7 +138,11 @@ export async function extractPythonDoubles(
     if (!fn) continue;
     const fnText = fn.text;
     const args = field(node, 'arguments');
-    const argsNode = args?.namedChildren ?? [];
+    // A comment is a named child of the argument list, so
+    // `patch.object(mod._x,  # type: ignore\n "method")` put the comment in the
+    // second position and the method name became `# type: ignore`. Positional
+    // arguments are counted over the real ones only.
+    const argsNode = (args?.namedChildren ?? []).filter((a) => a.type !== 'comment');
     const first = argsNode[0];
     const framework = fnText.startsWith('mocker.') ? 'pytest-mock' : 'unittest.mock';
 
