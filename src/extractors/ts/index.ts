@@ -20,26 +20,42 @@ const METHOD_TYPES = new Set([
   'abstract_method_signature',
 ]);
 
-/** Extract a flat field map from an object type / interface body / type literal. */
+/**
+ * Extract a flat field map from the TEXT of an object type.
+ *
+ * Prefer `fieldsFromTypeBody` wherever the parse node is available. This is for
+ * the places that only have text, such as the declared type of a field that is
+ * itself an object.
+ */
 export function fieldsFromTypeText(text: string): Map<string, FieldSymbol> | null {
   if (!text.startsWith('{') || !text.endsWith('}')) return null;
   const fields = new Map<string, FieldSymbol>();
-  // Split `name(?): type;` members at the top nesting level of the object type.
+  // Split `name(?): type` members at the top nesting level. TypeScript accepts
+  // a semicolon, a comma or nothing but a newline between them, and all three
+  // have to end a member or the rest of the object reads as part of the first
+  // field's type.
   const body = text.slice(1, -1);
   let depth = 0;
   let cur = '';
+  let prev = '';
   const parts: string[] = [];
+  const push = (): void => {
+    if (cur.trim()) parts.push(cur);
+    cur = '';
+  };
   for (const ch of body) {
-    if (ch === '{' || ch === '(' || ch === '[') depth++;
-    else if (ch === '}' || ch === ')' || ch === ']') depth = Math.max(0, depth - 1);
-    if (ch === ';' && depth === 0) {
-      parts.push(cur);
-      cur = '';
+    if (ch === '{' || ch === '(' || ch === '[' || ch === '<') depth++;
+    // `>` closes a type argument list, except in `=>`, which closes nothing.
+    else if (ch === '}' || ch === ')' || ch === ']' || (ch === '>' && prev !== '='))
+      depth = Math.max(0, depth - 1);
+    if ((ch === ';' || ch === ',' || ch === '\n') && depth === 0) {
+      push();
     } else {
       cur += ch;
     }
+    if (!/\s/.test(ch)) prev = ch;
   }
-  if (cur.trim()) parts.push(cur);
+  push();
   for (const part of parts) {
     // The type runs to the end of the member. It is NOT "everything up to a
     // semicolon": the split above already ended the member at the top-level
@@ -58,6 +74,43 @@ export function fieldsFromTypeText(text: string): Map<string, FieldSymbol> | nul
         required: !m[2],
       });
     }
+  }
+  return fields.size > 0 ? fields : null;
+}
+
+/**
+ * The fields of an `interface_body` or an `object_type`, read from the parse
+ * tree rather than from its text.
+ *
+ * TypeScript lets an interface separate its members with semicolons, commas or
+ * nothing but a newline. Splitting the text on semicolons therefore read a
+ * newline-separated interface as one enormous member: the first field was
+ * registered and every other one reported as a field the type does not have.
+ * The grammar already knows where a member ends, so ask it.
+ *
+ * `fieldsFromTypeText` remains for the places that only have text, such as the
+ * declared type of a field that is itself an object.
+ */
+function fieldsFromTypeBody(
+  body: import('web-tree-sitter').Node | null,
+): Map<string, FieldSymbol> | null {
+  if (!body) return null;
+  const fields = new Map<string, FieldSymbol>();
+  for (const child of body.namedChildren) {
+    if (child.type !== 'property_signature') continue;
+    const name =
+      field(child, 'name')?.text ??
+      child.namedChildren.find(
+        (n) => n.type === 'property_identifier' || n.type === 'string' || n.type === 'identifier',
+      )?.text;
+    if (!name) continue;
+    // `?` is an anonymous token between the name and the type annotation.
+    const optional = child.children.some((c) => !c.isNamed && c.text === '?');
+    fields.set(name.replace(/^(['"`])(.*)\1$/, '$2'), {
+      name,
+      type: typeTextOf(child, 'type'),
+      required: !optional,
+    });
   }
   return fields.size > 0 ? fields : null;
 }
@@ -586,14 +639,17 @@ export async function indexTsFile(
       }
     }
 
-    // Members / fields.
+    // Members / fields, read from the parse tree. Falls back to the text
+    // reader only for an alias whose value is not a plain object type.
     if (d.kind === 'type_alias') {
       const value = field(d.node, 'value');
-      const fm = value ? fieldsFromTypeText(value.text) : null;
+      const fm = value
+        ? (fieldsFromTypeBody(value.type === 'object_type' ? value : null) ??
+          fieldsFromTypeText(value.text))
+        : null;
       if (fm) typeSym.fields = fm;
     } else if (d.kind === 'interface') {
-      const body = field(d.node, 'body');
-      const fm = body ? fieldsFromTypeText(body.text) : null;
+      const fm = fieldsFromTypeBody(field(d.node, 'body'));
       if (fm) typeSym.fields = fm;
     }
 

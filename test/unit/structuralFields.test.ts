@@ -84,6 +84,26 @@ describe('the fields of a declared object type', () => {
     expect(fields?.get('id')?.required).toBe(true);
   });
 
+  it('ends a member at a newline or a comma, not only a semicolon', () => {
+    expect(namesOf('{\n  gamesPlayed: number\n  totalWords: number\n}')).toEqual([
+      'gamesPlayed',
+      'totalWords',
+    ]);
+    expect(namesOf('{ a: number, b: string }')).toEqual(['a', 'b']);
+  });
+
+  it('does not end a member at a comma inside a type argument list', () => {
+    const fields = fieldsFromTypeText('{ a: number, b: Record<string, number> }');
+    expect([...(fields?.keys() ?? [])]).toEqual(['a', 'b']);
+    expect(fields?.get('b')?.type).toBe('Record<string, number>');
+  });
+
+  it('does not treat the arrow of a function type as a closing bracket', () => {
+    const fields = fieldsFromTypeText('{ cb: (a: string) => void, id: string }');
+    expect([...(fields?.keys() ?? [])]).toEqual(['cb', 'id']);
+    expect(fields?.get('cb')?.type).toBe('(a: string) => void');
+  });
+
   it('gives up on anything that is not an object type', () => {
     expect(fieldsFromTypeText('string')).toBeNull();
     expect(fieldsFromTypeText('')).toBeNull();
