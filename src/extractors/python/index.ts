@@ -128,6 +128,78 @@ function identifiersInTarget(node: SyntaxNode): string[] {
 }
 
 /**
+ * Statements that can hold a module-level definition without opening a scope of
+ * their own, so a `def` inside one is still a module attribute.
+ *
+ * `function_definition` and `class_definition` are deliberately absent: both do
+ * open a scope, and neither is descended into.
+ */
+const SCOPE_PRESERVING = new Set([
+  'block',
+  'if_statement',
+  'elif_clause',
+  'else_clause',
+  'try_statement',
+  'except_clause',
+  'except_group_clause',
+  'finally_clause',
+  'with_statement',
+  'for_statement',
+  'while_statement',
+  'match_statement',
+  'case_clause',
+]);
+
+/**
+ * Record every name a scope-preserving block binds, at any depth reachable
+ * without crossing into a function or a class.
+ *
+ * Names land in `unknownMembers` rather than in `methods`: a conditional
+ * definition may be one of several competing branches, so which signature
+ * survives at import time cannot be read off the source. The name exists, its
+ * signature does not, which is how a decorated definition is treated too.
+ */
+function collectBlockBindings(node: SyntaxNode, sym: TypeSymbol): void {
+  for (const child of node.namedChildren) {
+    if (child.type === 'function_definition' || child.type === 'class_definition') {
+      const name = field(child, 'name')?.text;
+      if (name) {
+        sym.unknownMembers.add(name);
+        // PEP 562, as at the top level: a module with __getattr__ answers to
+        // any name, whether or not the guard around it is taken.
+        if (name === '__getattr__') sym.unknownMembers.add('*');
+      }
+      continue;
+    }
+
+    if (child.type === 'decorated_definition') {
+      const inner = child.namedChildren.find(
+        (c) => c.type === 'function_definition' || c.type === 'class_definition',
+      );
+      const name = inner ? field(inner, 'name')?.text : undefined;
+      if (name) {
+        sym.unknownMembers.add(name);
+        if (name === '__getattr__') sym.unknownMembers.add('*');
+      }
+      continue;
+    }
+
+    if (child.type === 'expression_statement') {
+      const assign = child.namedChildren[0];
+      if (assign && (assign.type === 'assignment' || assign.type === 'augmented_assignment')) {
+        const left = field(assign, 'left');
+        if (left) {
+          for (const name of identifiersInTarget(left)) sym.unknownMembers.add(name);
+        }
+      }
+      continue;
+    }
+
+    if (SCOPE_PRESERVING.has(child.type)) collectBlockBindings(child, sym);
+  }
+}
+
+/**
  * The module symbol for a Python file: what it defines at the top level, and
  * what it binds from elsewhere.
  *
@@ -201,6 +273,16 @@ function moduleSymbolFor(relFile: string, root: SyntaxNode): TypeSymbol {
         }
       }
     }
+  }
+
+  // A version guard, an import fallback or a feature flag puts an ordinary
+  // definition one level down, and the loop above reads only the top level. A
+  // name left bound by nothing becomes a ghost, so the same reasoning the
+  // import walk below is built on applies here: descend, and accept that a
+  // definition the interpreter may never execute is counted as present. That
+  // direction costs a missed finding rather than a wrong one.
+  for (const child of root.namedChildren) {
+    if (SCOPE_PRESERVING.has(child.type)) collectBlockBindings(child, sym);
   }
 
   // `setattr(sys.modules[__name__], ...)` and `globals()[x] = y` put names in
