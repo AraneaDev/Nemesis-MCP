@@ -1,11 +1,31 @@
 import { describe, expect, it } from 'vitest';
 import { analyzeDoubles } from '../../src/core/analyzer.js';
-import { emptyGraph } from '../../src/core/symbolGraph.js';
+import { addModule, emptyGraph } from '../../src/core/symbolGraph.js';
 import { extractTsDoubles } from '../../src/extractors/ts/doubles.js';
 
-async function run(source: string, exports: Set<string> | null | undefined) {
+async function run(
+  source: string,
+  exports: Set<string> | null | undefined,
+  opts: { alias?: boolean } = {},
+) {
   const graph = emptyGraph();
   if (exports !== undefined) graph.exportsByFile.set('src/api.ts', exports);
+  if (opts.alias) {
+    graph.tsPathAliases = [
+      { configDir: '.', prefix: '@/', suffix: '', exact: false, targets: ['src/*'] },
+    ];
+    addModule(graph, {
+      name: 'src/api.ts',
+      file: 'src/api.ts',
+      kind: 'module',
+      methods: new Map(),
+      unknownMembers: new Set(),
+      extends: [],
+      implements: [],
+      uses: [],
+      line: 1,
+    });
+  }
   const { doubles } = await extractTsDoubles('tests/api.test.ts', source, 'typescript');
   return analyzeDoubles({
     doubles,
@@ -34,16 +54,59 @@ describe('a module replaced wholesale', () => {
     expect(await run(`vi.mock('../src/api', () => ({ default: vi.fn() }));`, EXPORTS)).toEqual([]);
   });
 
-  it('says nothing about a factory that spreads the original', async () => {
-    // The rest of the shape came from the module itself, so the literal is
-    // not a list of what the test believes the module exports.
+  it('still reads the keys a factory states beside a spread', async () => {
+    // A spread settles what the mock KEEPS, not what it adds. `getUser` is an
+    // extra key either way, and the module exporting nothing by that name
+    // makes it configuration nothing can reach. Dropping the whole factory on
+    // sight of a spread hid four such keys in one repository.
     const source = [
       `vi.mock('../src/api', async (importOriginal) => ({`,
       `  ...(await importOriginal()),`,
       `  getUser: vi.fn(),`,
       `}));`,
     ].join('\n');
+    const found = await run(source, EXPORTS);
+    expect(found.map((f) => f.message)).toEqual([
+      expect.stringContaining("supplies 'getUser', which that module does not export"),
+    ]);
+  });
+
+  it('accepts a spread beside keys the module does export', async () => {
+    const source = [
+      `vi.mock('../src/api', async (importOriginal) => ({`,
+      `  ...(await importOriginal()),`,
+      `  saveUser: vi.fn(),`,
+      `}));`,
+    ].join('\n');
     expect(await run(source, EXPORTS)).toEqual([]);
+  });
+
+  it('reads a factory whose body is a block', async () => {
+    const source = [
+      `vi.mock('../src/api', async (importOriginal) => {`,
+      `  const actual = await importOriginal();`,
+      `  return { ...actual, getUser: vi.fn() };`,
+      `});`,
+    ].join('\n');
+    expect((await run(source, EXPORTS))[0]?.message).toContain("supplies 'getUser'");
+  });
+
+  // `vi.mock('@/services/api', ...)` through a tsconfig path alias. Requiring a
+  // relative specifier dropped these entirely: in one repository that was four
+  // of the nine places a dead key was configured.
+  it('reads a mock whose specifier is a tsconfig path alias', async () => {
+    const found = await run(`vi.mock('@/api', () => ({ getUser: vi.fn() }));`, EXPORTS, {
+      alias: true,
+    });
+    expect(found.map((f) => f.message)).toEqual([
+      expect.stringContaining("supplies 'getUser', which that module does not export"),
+    ]);
+  });
+
+  it('accepts real exports through an alias', async () => {
+    expect(
+      await run(`vi.mock('@/api', () => ({ saveUser: vi.fn() }));`, EXPORTS, { alias: true }),
+    ).toEqual([]);
   });
 
   it('says nothing about a computed key', async () => {
