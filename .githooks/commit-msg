@@ -1,0 +1,16 @@
+#!/bin/sh
+# One rule for a commit subject, shared with the pull request title check in
+# .github/workflows/pr-title.yml. Both call the same script, so the local rule
+# and the CI rule cannot drift apart.
+#
+# The repository root is asked for rather than derived from $0. This hook runs
+# from .git/hooks/, so "$(dirname "$0")/../scripts" is .git/scripts, which does
+# not exist. That resolves correctly only when the hook is run from a tracked
+# directory, which is exactly what the installer deliberately does not do.
+#
+# Deliberate exception (a fixup you intend to squash away):
+#     git commit --no-verify
+set -eu
+
+root=$(git rev-parse --show-toplevel)
+exec bash "$root/scripts/check-commit-style.sh" --file "$1"
