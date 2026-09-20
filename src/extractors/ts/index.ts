@@ -24,31 +24,37 @@ const METHOD_TYPES = new Set([
 export function fieldsFromTypeText(text: string): Map<string, FieldSymbol> | null {
   if (!text.startsWith('{') || !text.endsWith('}')) return null;
   const fields = new Map<string, FieldSymbol>();
-  // Match `name(?): type;` at the top nesting level of the object type.
+  // Split `name(?): type;` members at the top nesting level of the object type.
   const body = text.slice(1, -1);
   let depth = 0;
   let cur = '';
   const parts: string[] = [];
   for (const ch of body) {
     if (ch === '{' || ch === '(' || ch === '[') depth++;
-    else if (ch === '}' || ch === ')' || ch === ']') depth--;
+    else if (ch === '}' || ch === ')' || ch === ']') depth = Math.max(0, depth - 1);
     if (ch === ';' && depth === 0) {
       parts.push(cur);
       cur = '';
     } else {
       cur += ch;
     }
-    if (ch === '}' || ch === ')') depth = Math.max(0, depth - 0); // keep depth balanced
   }
   if (cur.trim()) parts.push(cur);
   for (const part of parts) {
-    const m = /^\s*(?:readonly\s+)?([A-Za-z_$][\w$]*)(\?)?:\s*([^;]+);?\s*$/.exec(
+    // The type runs to the end of the member. It is NOT "everything up to a
+    // semicolon": the split above already ended the member at the top-level
+    // semicolon, and any semicolon still inside belongs to an inline object
+    // type (`pagination: { page: number; total: number }`). Stopping at the
+    // first one dropped every such field, which then read as a field the type
+    // does not have, and any stub supplying it was reported as drift.
+    const m = /^\s*(?:readonly\s+)?([A-Za-z_$][\w$]*)(\?)?:\s*([\s\S]+)$/.exec(
       part.replace(/\n/g, ' '),
     );
-    if (m?.[1] && m[3]) {
+    const declared = m?.[3]?.replace(/;\s*$/, '').trim();
+    if (m?.[1] && declared) {
       fields.set(m[1], {
         name: m[1],
-        type: m[3].trim(),
+        type: declared,
         required: !m[2],
       });
     }
