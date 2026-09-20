@@ -123,12 +123,17 @@ export interface SymbolGraph {
  * that declared it. `prefix`/`suffix` are the pattern split on its `*`
  * (`suffix` is `''` for a pattern with no wildcard); `targets` are the
  * repo-relative destination patterns, still carrying `*`, already resolved
- * against that tsconfig's own directory and `baseUrl`.
+ * against that tsconfig's own directory and `baseUrl`. `exact` is true for a
+ * key with no `*` at all (`"@app/special": [...]`) as opposed to one whose
+ * wildcard just happens to leave `suffix` empty (`"@app/*": [...]`) — the two
+ * need different matching rules: an exact key matches only the whole
+ * specifier, a wildcard key matches a prefix/suffix pair against any middle.
  */
 export interface TsPathAlias {
   configDir: string;
   prefix: string;
   suffix: string;
+  exact: boolean;
   targets: string[];
 }
 

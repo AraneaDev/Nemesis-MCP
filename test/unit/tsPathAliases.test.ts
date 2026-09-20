@@ -69,6 +69,7 @@ describe('reading tsconfig.json off disk', () => {
         configDir: 'frontend',
         prefix: '@/',
         suffix: '',
+        exact: false,
         targets: ['frontend/src/*'],
       },
     ]);
