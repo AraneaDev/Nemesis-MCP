@@ -19,6 +19,7 @@ import type {
 import { discoverFiles, filterByLanguages } from './discovery.js';
 import { emptyGraph, normalizeSymbolName } from './symbolGraph.js';
 import { analyzeDoubles } from './analyzer.js';
+import { resolveModule } from './moduleResolve.js';
 import { passesStrictness } from './policy.js';
 import { indexTsFile } from '../extractors/ts/index.js';
 import { extractTsDoubles } from '../extractors/ts/doubles.js';
@@ -337,6 +338,18 @@ export async function verifySymbol(
   }
   if (ambiguous) found = null;
 
+  // A module is a resolution target like any other, so verify-symbol has to
+  // be able to name one. Without this the two commands genuinely disagree:
+  // audit reports a finding whose target is `app/mailer.py::dispatch`, and
+  // verify-symbol, asked about `app/mailer.py`, finds nothing and reports no
+  // doubles at all. Both a dotted path and a repo-relative file path work,
+  // because the first is what a reader types and the second is what a finding
+  // prints.
+  if (!found && !ambiguous) {
+    found =
+      graph.modules.get(symbolName) ?? resolveModule(graph, symbolName, testFiles[0] ?? '') ?? null;
+  }
+
   const { doubles, fileLines } = await extractDoubles(
     testFiles,
     rootDir,
@@ -357,12 +370,44 @@ export async function verifySymbol(
     methodNames: Set<string>;
   }
   const candidates: Candidate[] = [];
+  const isModule = found?.kind === 'module';
   for (const d of doubles) {
     if (!d.targetSymbol) continue;
+    if (isModule) {
+      // A module is named by a dotted path or a specifier, and identified by
+      // the file it resolves to. Comparing the names would compare
+      // `postal.mailer` against `.../postal/mailer.py` and never match, and
+      // taking the segment after the last dot would compare against `py`.
+      if (resolveModule(graph, d.targetSymbol, d.file)?.file !== found?.file) continue;
+      candidates.push({ double: d, methodNames: new Set(d.methods.map((m) => m.name)) });
+      continue;
+    }
     const t = normalizeSymbolName(d.targetSymbol);
     const short = t.split('.').pop() ?? t;
     if (t !== targetLower && short !== shortLower) continue;
     candidates.push({ double: d, methodNames: new Set(d.methods.map((m) => m.name)) });
+  }
+
+  // A finding is attributed to the owner that declares the member, which is
+  // not always the thing the double named. A stub of an inherited method
+  // reports the ancestor, and a patch of an imported name reports the module
+  // that defines it. Asked about that owner, the name-based pass above finds
+  // nothing, and this command would answer with silence about a finding the
+  // audit is printing. So: any double that configures a member this symbol
+  // owns is a candidate too.
+  const ownedHere = findings.filter((f) => f.target.split('::')[0] === found?.name);
+  if (ownedHere.length > 0) {
+    const already = new Set(candidates.map((c) => c.double));
+    for (const d of doubles) {
+      if (already.has(d)) continue;
+      const names = new Set(d.methods.map((m) => m.name));
+      const owns = ownedHere.some((f) => {
+        const idx = f.target.indexOf('::');
+        const member = idx >= 0 ? f.target.slice(idx + 2) : null;
+        return f.file === d.file && member !== null && names.has(member);
+      });
+      if (owns) candidates.push({ double: d, methodNames: names });
+    }
   }
 
   // Attribute each finding to its nearest owning double: a double that
