@@ -3,8 +3,8 @@
 // ---------------------------------------------------------------------------
 
 import path from 'node:path';
-import type { TestDouble } from '../../core/types.js';
-import { parseSource } from '../../parser/loader.js';
+import type { TestDouble, ScanDiagnostic } from '../../core/types.js';
+import { parseSource, report } from '../../parser/loader.js';
 import { walk, field, unquote } from '../walk.js';
 
 type SyntaxNode = import('web-tree-sitter').Node;
@@ -331,11 +331,17 @@ export async function extractTsDoubles(
   relFile: string,
   source: string,
   language: 'typescript' | 'javascript',
+  diagnostics?: ScanDiagnostic[],
 ): Promise<TsDoublesResult> {
   const doubles: TestDouble[] = [];
   const ext = path.extname(relFile);
   const grammar = ext === '.tsx' ? 'tsx' : language === 'javascript' ? 'javascript' : 'typescript';
-  const parsed = await parseSource(language, source, grammar);
+  const parsed = await parseSource(
+    language,
+    source,
+    grammar,
+    report(relFile, language, diagnostics),
+  );
   const { root } = parsed;
 
   // Pass 1: variable declared types (`const service = new UserService()`).

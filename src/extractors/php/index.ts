@@ -8,9 +8,10 @@ import type {
   ParamSymbol,
   SymbolGraph,
   TypeSymbol,
+  ScanDiagnostic,
 } from '../../core/types.js';
 import { addType, addFunction } from '../../core/symbolGraph.js';
-import { parseSource } from '../../parser/loader.js';
+import { parseSource, report } from '../../parser/loader.js';
 import { walk, field, typeTextOf, visibilityOf } from '../walk.js';
 
 type SyntaxNode = import('web-tree-sitter').Node;
@@ -161,8 +162,9 @@ export async function indexPhpFile(
   relFile: string,
   source: string,
   graph: SymbolGraph,
+  diagnostics?: ScanDiagnostic[],
 ): Promise<void> {
-  const parsed = await parseSource('php', source);
+  const parsed = await parseSource('php', source, undefined, report(relFile, 'php', diagnostics));
   const { root } = parsed;
   const header = headerMap(root);
 

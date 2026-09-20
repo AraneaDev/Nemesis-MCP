@@ -2,8 +2,8 @@
 // PHPUnit / Pest / Mockery double extractor (verified against tree-sitter-php).
 // ---------------------------------------------------------------------------
 
-import type { TestDouble } from '../../core/types.js';
-import { parseSource } from '../../parser/loader.js';
+import type { TestDouble, ScanDiagnostic } from '../../core/types.js';
+import { parseSource, report } from '../../parser/loader.js';
 import { walk, field, unquote } from '../walk.js';
 
 type SyntaxNode = import('web-tree-sitter').Node;
@@ -315,9 +315,13 @@ function listedMethodNames(node: SyntaxNode): Array<{ name: string; line: number
   return out;
 }
 
-export async function extractPhpDoubles(relFile: string, source: string): Promise<TestDouble[]> {
+export async function extractPhpDoubles(
+  relFile: string,
+  source: string,
+  diagnostics?: ScanDiagnostic[],
+): Promise<TestDouble[]> {
   const doubles: TestDouble[] = [];
-  const parsed = await parseSource('php', source);
+  const parsed = await parseSource('php', source, undefined, report(relFile, 'php', diagnostics));
   const { root } = parsed;
 
   /** variable name → factory hit (from `$x = createMock(Foo::class)`). */

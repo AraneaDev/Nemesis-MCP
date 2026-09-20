@@ -7,7 +7,7 @@ import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { Parser, Language, Query } from 'web-tree-sitter';
-import type { LanguageId } from '../core/types.js';
+import type { LanguageId, ScanDiagnostic } from '../core/types.js';
 
 export type { Language as TSLanguage } from 'web-tree-sitter';
 
@@ -78,15 +78,39 @@ export interface ParsedFile {
   lines: string[];
 }
 
+/**
+ * Where to record that a file did not parse cleanly.
+ *
+ * A grammar recovers from what it cannot read by standing an error node in its
+ * place, so a parse never fails outright: it quietly stops understanding the
+ * rest of the file. Without somewhere to say so, a file the scan could not read
+ * looks exactly like a file with nothing wrong in it.
+ */
+export interface ParseReport {
+  file: string;
+  language?: LanguageId;
+  diagnostics: ScanDiagnostic[];
+}
+
 /** Parse source text with the grammar for the given language. */
 export async function parseSource(
   language: LanguageId,
   source: string,
   grammar: GrammarName = LANGUAGE_GRAMMAR[language],
+  report?: ParseReport,
 ): Promise<ParsedFile> {
   const parser = await getParser(grammar);
   const tree = parser.parse(source);
   if (!tree) throw new Error(`Parsing failed for a ${language} file`);
+  if (report && tree.rootNode.hasError) {
+    report.diagnostics.push({
+      file: report.file,
+      ...(report.language ? { language: report.language } : {}),
+      stage: 'parse',
+      message: 'Parsed with errors; the rest of the file was not read.',
+      fatal: false,
+    });
+  }
   return { source, root: tree.rootNode, lines: source.split('\n') };
 }
 
@@ -112,4 +136,13 @@ export function* runQuery(
     }
     yield caps;
   }
+}
+
+/** A `ParseReport` when there is somewhere to record to, and nothing otherwise. */
+export function report(
+  file: string,
+  language: LanguageId,
+  diagnostics: ScanDiagnostic[] | undefined,
+): ParseReport | undefined {
+  return diagnostics ? { file, language, diagnostics } : undefined;
 }

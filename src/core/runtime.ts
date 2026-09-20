@@ -104,13 +104,13 @@ async function indexProduction(
     if (!lang) continue;
     try {
       if (lang === 'typescript' || lang === 'javascript') {
-        await indexTsFile(rel, source, graph);
+        await indexTsFile(rel, source, graph, diagnostics);
       } else if (lang === 'php') {
-        await indexPhpFile(rel, source, graph);
+        await indexPhpFile(rel, source, graph, diagnostics);
       } else if (lang === 'python') {
-        await indexPythonFile(rel, source, graph);
+        await indexPythonFile(rel, source, graph, diagnostics);
       } else if (lang === 'rust') {
-        await indexRustFile(rel, source, graph);
+        await indexRustFile(rel, source, graph, diagnostics);
       }
     } catch (error) {
       const language = languageOf(rel);
@@ -159,14 +159,14 @@ async function extractDoubles(
     if (!lang) continue;
     try {
       if (lang === 'typescript' || lang === 'javascript') {
-        const r = await extractTsDoubles(rel, source, lang);
+        const r = await extractTsDoubles(rel, source, lang, diagnostics);
         doubles.push(...r.doubles);
       } else if (lang === 'php') {
-        doubles.push(...(await extractPhpDoubles(rel, source)));
+        doubles.push(...(await extractPhpDoubles(rel, source, diagnostics)));
       } else if (lang === 'python') {
-        doubles.push(...(await extractPythonDoubles(rel, source)));
+        doubles.push(...(await extractPythonDoubles(rel, source, diagnostics)));
       } else if (lang === 'rust') {
-        doubles.push(...(await extractRustDoubles(rel, source)));
+        doubles.push(...(await extractRustDoubles(rel, source, diagnostics)));
       }
     } catch (error) {
       const language = languageOf(rel);
