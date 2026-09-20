@@ -203,7 +203,7 @@ function fakeSignature(
  */
 function factoryKeys(
   factory: SyntaxNode | undefined,
-): Array<{ name: string; line: number }> | null {
+): Array<{ name: string; line: number; value: SyntaxNode | undefined }> | null {
   if (!factory) return null;
   if (factory.type !== 'arrow_function' && factory.type !== 'function_expression') return null;
   let body = field(factory, 'body');
@@ -214,7 +214,7 @@ function factoryKeys(
   while (body?.type === 'parenthesized_expression') body = body.namedChildren[0] ?? null;
   if (body?.type === 'await_expression') return null;
   if (!body || body.type !== 'object') return null;
-  const keys: Array<{ name: string; line: number }> = [];
+  const keys: Array<{ name: string; line: number; value: SyntaxNode | undefined }> = [];
   for (const property of body.namedChildren) {
     if (property.type === 'spread_element') return null; // the rest came from elsewhere
     if (property.type === 'comment') continue;
@@ -224,9 +224,83 @@ function factoryKeys(
     keys.push({
       name: key.type === 'string' ? unquote(key.text) : key.text,
       line: property.startPosition.row + 1,
+      value: field(property, 'value') ?? undefined,
     });
   }
   return keys;
+}
+
+/**
+ * What a factory value says about the member it stands in for.
+ *
+ * `vi.fn(impl)` states a signature; `.mockReturnValue(x)` and friends pin a
+ * return. A plain object, a bare `vi.fn()`, or anything that never bottoms
+ * out at `vi.fn`/`jest.fn` states nothing, and null keeps it out of the
+ * double list rather than producing an empty double.
+ */
+function stubShapeOf(value: SyntaxNode | undefined): {
+  fakeArity: number | null;
+  fakeParamTypes?: (string | null)[];
+  returnExpr: string | null;
+  returnTypeHint: string | null;
+  resolvedReturn?: boolean;
+} | null {
+  if (!value) return null;
+  let node: SyntaxNode | null = value;
+  let returnExpr: string | null = null;
+  let returnTypeHint: string | null = null;
+  let resolvedReturn = false;
+  let impl: SyntaxNode | undefined;
+  let foundFn = false;
+
+  // Unwrap the chain: vi.fn(impl).mockReturnValue(1). The walk stops at the
+  // innermost link, `vi.fn`/`jest.fn` itself: that call's own argument is the
+  // implementation, not another link to walk through, so it is taken here
+  // rather than being descended past on the way to the `vi`/`jest` identifier.
+  for (let i = 0; i < 8 && node?.type === 'call_expression' && !foundFn; i++) {
+    const call = memberCall(node);
+    if (!call) break;
+    const args = call.argsNode?.namedChildren ?? [];
+    if (call.property === 'fn' && apiRoot(call)) {
+      impl = args[0];
+      foundFn = true;
+      break;
+    }
+    if (RETURN_SETTERS.test(call.property)) {
+      if (call.property.startsWith('mockRejectedValue')) resolvedReturn = true;
+      else if (call.property.startsWith('mockResolvedValue')) {
+        resolvedReturn = true;
+        returnExpr = args[0]?.text ?? null;
+        returnTypeHint = literalType(returnExpr ?? '');
+      } else {
+        returnExpr = args[0]?.text ?? null;
+        returnTypeHint = literalType(returnExpr ?? '');
+      }
+    }
+    node = field(call.fn, 'object');
+  }
+
+  // The chain never bottomed out at `vi.fn`/`jest.fn`: nothing here states a
+  // signature or a return, so it is not a stub this check can read.
+  if (!foundFn) return null;
+
+  const sig = fakeSignature(impl);
+  if (sig) {
+    const body = sig.body;
+    if (body && body.type !== 'statement_block' && returnExpr === null) {
+      returnExpr = body.text;
+      returnTypeHint = literalType(body.text);
+    }
+  }
+  if (!sig && returnExpr === null && !resolvedReturn) return null;
+
+  return {
+    fakeArity: sig ? sig.arity : null,
+    ...(sig ? { fakeParamTypes: sig.types } : {}),
+    returnExpr,
+    returnTypeHint,
+    ...(resolvedReturn ? { resolvedReturn: true } : {}),
+  };
 }
 
 export interface TsDoublesResult {
@@ -407,13 +481,39 @@ export async function extractTsDoubles(
       targetSymbol: specifier,
       moduleSpecifier: specifier,
       method: null,
-      methods: keys,
+      methods: keys.map(({ name, line }) => ({ name, line })),
       withArity: null,
       assertedArity: null,
       returnTypeHint: null,
       returnExpr: null,
       confidence: 'definite',
     });
+
+    // A factory value is a stub in its own right, not just a name. Where it
+    // states a signature or pins a return, it earns its own double so the
+    // existing member checks (arity, parameter types, return type) can reach
+    // it the same way they reach a `spyOn`.
+    for (const key of keys) {
+      const stub = stubShapeOf(key.value);
+      if (!stub) continue;
+      doubles.push({
+        framework: `${apiRoot(call)}.mock`,
+        language,
+        file: relFile,
+        line: key.line,
+        targetSymbol: specifier,
+        method: key.name,
+        methods: [{ name: key.name, line: key.line }],
+        withArity: null,
+        assertedArity: null,
+        ...(stub.fakeArity !== null ? { fakeArity: stub.fakeArity } : {}),
+        ...(stub.fakeParamTypes ? { fakeParamTypes: stub.fakeParamTypes } : {}),
+        ...(stub.resolvedReturn ? { resolvedReturn: true } : {}),
+        returnTypeHint: stub.returnTypeHint,
+        returnExpr: stub.returnExpr,
+        confidence: 'definite',
+      });
+    }
   }
 
   for (const rec of spies) {
