@@ -170,6 +170,72 @@ describe('what the analyzer reports having reached', () => {
   });
 });
 
+describe('resolution runs before the text-based unknowable guesses', () => {
+  it('counts a repository class named Storage as checked, still reporting its real violations', () => {
+    // `Storage` and `Date` are also browser/JS globals, so the text-based
+    // classifier used to write these off as unknowable before resolution
+    // ever got a chance to find the repository's own class of the same
+    // name. That made the summary disagree with the findings printed
+    // beside it: a double genuinely compared and found wanting, but
+    // counted as nothing to check.
+    const graph = graphWithSvc();
+    addType(graph, {
+      name: 'Storage',
+      file: 'src/Storage.ts',
+      kind: 'class',
+      methods: new Map([
+        ['get', { name: 'get', returnType: 'string', params: [], visibility: 'public', line: 1 }],
+      ]),
+      unknownMembers: new Set(),
+      extends: [],
+      implements: [],
+      uses: [],
+      line: 1,
+    });
+    const stats: AnalyzeStats = { checked: 0, unresolved: 0, unknowable: 0, noTarget: 0 };
+    const found = analyzeDoubles({
+      doubles: [double('Storage', 'missing')],
+      graph,
+      fileLines: new Map([['tests/a.test.ts', ['', '']]]),
+      options: { strictness: 'all', languages: [] },
+      stats,
+    });
+    expect(stats.checked).toBe(1);
+    expect(stats.unknowable).toBe(0);
+    expect(found[0]?.type).toBe('GHOST_METHOD');
+    expect(found[0]?.target).toBe('Storage::missing');
+  });
+
+  it('still counts the bare global Date as unknowable when no repository class shadows it', () => {
+    expect(statsFor([double('Date', 'now')]).unknowable).toBe(1);
+  });
+
+  it('counts a scoped-package-shaped alias that is configured as checked, not unknowable', () => {
+    // `@scope/thing` matches the same text pattern as a real npm package
+    // (`isUnknowableTarget`'s regex), but a configured tsconfig path alias
+    // resolves it to a file this scan owns. Resolving first is what tells
+    // the two apart.
+    const graph = graphWithSvc();
+    addModule(graph, {
+      name: 'src/thing.ts',
+      file: 'src/thing.ts',
+      kind: 'module',
+      methods: new Map(),
+      unknownMembers: new Set(),
+      extends: [],
+      implements: [],
+      uses: [],
+      line: 1,
+    });
+    graph.tsPathAliases = [
+      { configDir: '.', prefix: '@scope/', suffix: '', exact: false, targets: ['src/*'] },
+    ];
+    const stats = statsForGraph(graph, [moduleBoundDouble('@scope/thing', 'query')]);
+    expect(stats.checked).toBe(1);
+    expect(stats.unknowable).toBe(0);
+  });
+});
+
 describe('a target reached through the module binding map', () => {
   it('counts an identifier bound to a non-relative specifier as unknowable', () => {
     // `import * as axios from 'axios'; axios.get.mockResolvedValue(...)`:
