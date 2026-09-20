@@ -7,7 +7,7 @@
 [![Release](https://img.shields.io/github/v/release/AraneaDev/Nemesis-MCP?label=release)](https://github.com/AraneaDev/Nemesis-MCP/releases)
 [![CI](https://img.shields.io/github/actions/workflow/status/AraneaDev/Nemesis-MCP/ci.yml?label=CI)](https://github.com/AraneaDev/Nemesis-MCP/actions/workflows/ci.yml)
 [![Coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FAraneaDev%2FNemesis-MCP%2Fgh-pages%2Fcoverage.json)](https://github.com/AraneaDev/Nemesis-MCP/actions/workflows/ci.yml)
-[![License](https://img.shields.io/github/license/AraneaDev/Nemesis-MCP?label=license&color=yellow)](./LICENSE)
+[![License](https://img.shields.io/github/license/AraneaDev/Nemesis-MCP?label=license&color=yellow&cacheSeconds=3600)](./LICENSE)
 [![Language](https://img.shields.io/github/languages/top/AraneaDev/Nemesis-MCP)](https://github.com/AraneaDev/Nemesis-MCP)
 [![Last commit](https://img.shields.io/github/last-commit/AraneaDev/Nemesis-MCP?label=last%20commit)](https://github.com/AraneaDev/Nemesis-MCP/commits/main)
 [![Conventional Commits](https://img.shields.io/badge/commits-conventional-fe5196?logo=conventionalcommits&logoColor=white)](https://www.conventionalcommits.org/)
