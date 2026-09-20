@@ -115,6 +115,19 @@ function fieldsFromTypeBody(
   return fields.size > 0 ? fields : null;
 }
 
+/**
+ * True when a declaration sits inside `declare global { ... }`, which augments
+ * a type declared elsewhere rather than declaring one here.
+ */
+function isGlobalAugmentation(node: import('web-tree-sitter').Node): boolean {
+  let anc: import('web-tree-sitter').Node | null = node.parent;
+  while (anc) {
+    if (anc.type === 'ambient_declaration' && /^declare\s+global\b/.test(anc.text)) return true;
+    anc = anc.parent;
+  }
+  return false;
+}
+
 function fieldsFromClassBody(
   body: import('web-tree-sitter').Node | null,
 ): Map<string, FieldSymbol> | null {
@@ -648,9 +661,36 @@ export async function indexTsFile(
           fieldsFromTypeText(value.text))
         : null;
       if (fm) typeSym.fields = fm;
+      // `type Logger = typeof logger` names an object this scan cannot follow
+      // to its members. Indexing the alias with none at all made every call on
+      // it a ghost, so say the members are unknown instead of absent.
+      if (value?.type === 'type_query') typeSym.unknownMembers.add('*');
+      // `type DB = Database.Database` declares no members of its own; they all
+      // belong to whatever it aliases. Record that as heritage so member
+      // lookups follow it, and so a target living outside the scanned tree is
+      // recognised as unreadable rather than as empty.
+      if (
+        value &&
+        (value.type === 'type_identifier' ||
+          value.type === 'nested_type_identifier' ||
+          value.type === 'generic_type')
+      ) {
+        const head =
+          value.type === 'generic_type'
+            ? (value.namedChildren.find(
+                (c) => c.type === 'type_identifier' || c.type === 'nested_type_identifier',
+              )?.text ?? null)
+            : value.text;
+        if (head && head !== d.name) typeSym.extends.push(head);
+      }
     } else if (d.kind === 'interface') {
       const fm = fieldsFromTypeBody(field(d.node, 'body'));
       if (fm) typeSym.fields = fm;
+      // `declare global { interface Window { ... } }` ADDS to a type declared
+      // somewhere this scan never reads, usually the DOM's. The members here
+      // are real, the ones it already had are not visible, and indexing this as
+      // the whole of `Window` made every real DOM method read as missing.
+      if (isGlobalAugmentation(d.node)) typeSym.unknownMembers.add('*');
     }
 
     for (const { node: n } of walk(d.node)) {

@@ -322,6 +322,23 @@ function classify(
       continue;
     }
 
+    // A type that declares nothing of its own and inherits from somewhere this
+    // scan cannot read is a type it knows nothing about. `type DB =
+    // Database.Database` aliases a package's type, so every member lives in
+    // `node_modules`, which is never walked, and calling any of them missing is
+    // a guess. A type carrying members of its own still answers the question,
+    // and so does one with no ancestry at all: an empty module really does lack
+    // the name.
+    if (
+      !real &&
+      owner.methods.size === 0 &&
+      !owner.fields?.size &&
+      owner.unknownMembers.size === 0 &&
+      hasUnresolvedAncestor(graph, owner, { language: lang, fromFile: d.file })
+    ) {
+      continue;
+    }
+
     // A factory value's existence is check 28's business, not this branch's.
     // The module-shape double already reports a key the module does not
     // export, against the specifier the test actually wrote. Letting the
