@@ -210,6 +210,16 @@ function moduleSymbolFor(
   // in `module.exports`, so the lookup has to be able to look backwards.
   const declared = new Map<string, MethodSymbol>();
 
+  // Every name this file imports, local name -> where it came from. An import
+  // is not an export: `import { query } from './pg.js'` binds `query`
+  // locally and says nothing about what THIS file hands back to an importer.
+  // Unlike Python, where `from x import y` genuinely makes `y` an attribute
+  // of the importing module, a plain TypeScript import is invisible from
+  // outside the file. It only becomes a member — and only then does it
+  // belong in `sym.imports` — if an `export` statement re-exports it, which
+  // is resolved once every import and export in the file has been read.
+  const importedLocals = new Map<string, { from: string; name: string }>();
+
   const fnFromValue = (
     name: string,
     value: import('web-tree-sitter').Node,
@@ -286,15 +296,14 @@ function moduleSymbolFor(
             if (spec.type !== 'import_specifier') continue;
             const name = field(spec, 'name')?.text;
             const alias = field(spec, 'alias')?.text;
-            if (name) {
-              sym.imports!.set(alias ?? name, { from: source, name });
-              sym.unknownMembers.add(alias ?? name);
-            }
+            // Recorded for a later `export { ... }` to promote, not entered
+            // into `imports`/`unknownMembers` here: a plain import is a
+            // local binding, not a member of this file.
+            if (name) importedLocals.set(alias ?? name, { from: source, name });
           }
         } else if (part.type === 'identifier') {
           // `import foo from './x'` — the default export, bound locally.
-          sym.imports!.set(part.text, { from: source, name: 'default' });
-          sym.unknownMembers.add(part.text);
+          importedLocals.set(part.text, { from: source, name: 'default' });
         } else if (part.type === 'namespace_import') {
           // `import * as ns from './x'` binds `ns` to the whole namespace
           // object. It is a member of THIS file, not of the module it came
@@ -307,6 +316,12 @@ function moduleSymbolFor(
     }
     if (statement.type === 'export_statement') {
       const isDefault = statement.children.some((c) => !c.isNamed && c.text === 'default');
+      // `export { foo } from './other'` carries a source string alongside
+      // the export_clause; `export { foo, bar as baz }` does not. The two
+      // need different treatment below: the first names a member this file
+      // neither defines nor imports at all, the second re-exports something
+      // already declared or imported here.
+      const reExportSource = statement.namedChildren.find((c) => c.type === 'string');
       let sawDefaultTarget = false;
       for (const child of statement.namedChildren) {
         if (child.type === 'function_declaration') {
@@ -339,16 +354,40 @@ function moduleSymbolFor(
             takeNamedDecl(child);
           }
         } else if (child.type === 'export_clause') {
-          // `export { foo, bar as baz }` re-exports names declared earlier
-          // in this file under their local (or aliased) name.
           for (const spec of child.namedChildren) {
             if (spec.type !== 'export_specifier') continue;
             const localName = field(spec, 'name')?.text;
             const exportedName = field(spec, 'alias')?.text ?? localName;
             if (!exportedName) continue;
+            if (reExportSource) {
+              // `export { foo as bar } from './other'`: a genuine re-export
+              // of a name this file never defines or imports itself.
+              // `localName` is the name as written in that other module.
+              if (localName) {
+                sym.imports!.set(exportedName, {
+                  from: unquoteTs(reExportSource.text),
+                  name: localName,
+                });
+              }
+              continue;
+            }
+            // `export { foo, bar as baz }` re-exports a name declared or
+            // imported earlier in this file under its local (or aliased)
+            // name.
             const fn = localName ? declared.get(localName) : undefined;
-            if (fn) sym.methods.set(exportedName, fn);
-            else sym.unknownMembers.add(exportedName);
+            if (fn) {
+              sym.methods.set(exportedName, fn);
+              continue;
+            }
+            const imported = localName ? importedLocals.get(localName) : undefined;
+            if (imported) {
+              // `import { query } from './pg.js'; export { query };` — the
+              // import only becomes a member of this file now, at the point
+              // it is actually re-exported.
+              sym.imports!.set(exportedName, imported);
+              continue;
+            }
+            sym.unknownMembers.add(exportedName);
           }
         }
       }
