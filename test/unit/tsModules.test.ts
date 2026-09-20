@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { emptyGraph } from '../../src/core/symbolGraph.js';
+import { emptyGraph, resolveType } from '../../src/core/symbolGraph.js';
 import { indexTsFile } from '../../src/extractors/ts/index.js';
 import type { TypeSymbol } from '../../src/core/types.js';
 
@@ -166,5 +166,66 @@ describe('the module symbol for a TypeScript file', () => {
     const m = await moduleOf('export class Svc {\n  run(): boolean {\n    return true;\n  }\n}\n');
     expect(m.methods.has('run')).toBe(false);
     expect(m.unknownMembers.has('run')).toBe(false);
+  });
+});
+
+describe('types this scan cannot enumerate', () => {
+  async function typeOf(source: string, name: string, file = 'src/a.ts') {
+    const g = emptyGraph();
+    await indexTsFile(file, source, g);
+    return resolveType(g, name);
+  }
+
+  // `declare global { interface Window { ... } }` ADDS to the DOM's Window. It
+  // does not define it. Indexing it as a type holding only the augmented
+  // members made every real DOM method on `window` read as a ghost.
+  it('marks a globally augmented interface as answering to more than it lists', async () => {
+    const t = await typeOf(
+      'declare global {\n  interface Window {\n    showOpenFilePicker?: (o?: string) => Promise<string[]>;\n  }\n}\nexport {};\n',
+      'Window',
+    );
+    expect(t?.unknownMembers.has('*')).toBe(true);
+    // The augmented member is still declared, so arity and return checks reach it.
+    expect(t?.fields?.has('showOpenFilePicker')).toBe(true);
+  });
+
+  it('leaves an ordinary interface enumerable', async () => {
+    const t = await typeOf('export interface Plain { a: number }', 'Plain');
+    expect(t?.unknownMembers.has('*')).toBe(false);
+  });
+
+  // `type Logger = typeof logger` cannot be followed to the object's members,
+  // so the alias was indexed with no members at all and every call on it read
+  // as a ghost.
+  it('marks a typeof alias as answering to more than it lists', async () => {
+    const t = await typeOf(
+      'const logger = { warn(){}, info(){} };\nexport type Logger = typeof logger;\n',
+      'Logger',
+    );
+    expect(t?.unknownMembers.has('*')).toBe(true);
+  });
+
+  it('leaves an object-literal alias enumerable', async () => {
+    const t = await typeOf('export type Obj = { x: number };', 'Obj');
+    expect(t?.unknownMembers.has('*')).toBe(false);
+  });
+
+  // `type DB = Database.Database` declares no members of its own; they belong
+  // to whatever it aliases, which here lives in node_modules and is never
+  // walked. Recording the heritage is what lets the analyzer tell "a type this
+  // scan cannot read" apart from "a type with no members".
+  it('records what a type alias aliases as its heritage', async () => {
+    const t = await typeOf('export type DB = Database.Database;', 'DB');
+    expect(t?.extends).toEqual(['Database.Database']);
+  });
+
+  it('records the head of a generic alias', async () => {
+    const t = await typeOf('export type Rows = Array<string>;', 'Rows');
+    expect(t?.extends).toEqual(['Array']);
+  });
+
+  it('records nothing for an alias to a primitive', async () => {
+    const t = await typeOf('export type Id = string;', 'Id');
+    expect(t?.extends).toEqual([]);
   });
 });
