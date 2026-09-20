@@ -22,7 +22,7 @@ import {
   suggestMember,
 } from './symbolGraph.js';
 import { languageForFile } from './discovery.js';
-import { resolveModule } from './moduleResolve.js';
+import { isTsAliasSpecifier, resolveModule } from './moduleResolve.js';
 import { PYTHON_BUILTINS } from './pythonBuiltins.js';
 
 const SUPPRESSION = /nemesis-ignore/i;
@@ -647,18 +647,6 @@ function countDouble(d: TestDouble, graph: SymbolGraph, stats: AnalyzeStats): vo
     return;
   }
 
-  // An identifier bound to a module import (`import axios from 'axios'`) is a
-  // package by construction when that specifier is non-relative: there is no
-  // contract to check and there never will be. This is stronger than
-  // `isUnknowableTarget`'s guess from the text alone, because the binding
-  // came from an actual import in the file, not from an identifier that
-  // merely looks like a package name. A relative specifier still names a file
-  // this scan owns, so it falls through to the ordinary resolution below.
-  if (d.targetIsModule && !d.targetSymbol.startsWith('.')) {
-    stats.unknowable += 1;
-    return;
-  }
-
   if (isUnknowableTarget(d.targetSymbol)) {
     stats.unknowable += 1;
     return;
@@ -666,8 +654,32 @@ function countDouble(d: TestDouble, graph: SymbolGraph, stats: AnalyzeStats): vo
   const hint = { language: d.language, fromFile: d.file };
   const reached =
     resolveType(graph, d.targetSymbol, hint) ?? resolveModule(graph, d.targetSymbol, d.file);
-  if (reached) stats.checked += 1;
-  else stats.unresolved += 1;
+  if (reached) {
+    stats.checked += 1;
+    return;
+  }
+
+  // An identifier bound to a module import (`import axios from 'axios'`) is a
+  // package by construction when that specifier is non-relative and does not
+  // match a configured `tsconfig.json` path alias: there is no contract to
+  // check and there never will be. This is stronger than
+  // `isUnknowableTarget`'s guess from the text alone, because the binding
+  // came from an actual import in the file, not from an identifier that
+  // merely looks like a package name. Resolution (above, including through a
+  // path alias) already had its shot; a specifier that merely looks like an
+  // alias but did not resolve stays unresolved rather than being written off,
+  // because it may still be a real gap (a deleted file, say) rather than
+  // nothing to check. A relative specifier always stays resolvable, never
+  // unknowable, which resolution above already covers.
+  if (
+    d.targetIsModule &&
+    !d.targetSymbol.startsWith('.') &&
+    !isTsAliasSpecifier(graph, d.targetSymbol, d.file)
+  ) {
+    stats.unknowable += 1;
+    return;
+  }
+  stats.unresolved += 1;
 }
 
 /** Lightweight literal type inference for return expressions. */

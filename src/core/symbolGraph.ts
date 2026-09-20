@@ -14,6 +14,7 @@ export function emptyGraph(): SymbolGraph {
     exportsByFile: new Map(),
     modules: new Map(),
     skippedLanguages: [],
+    tsPathAliases: [],
   };
 }
 

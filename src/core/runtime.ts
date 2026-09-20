@@ -19,7 +19,7 @@ import type {
 import { discoverFiles, filterByLanguages } from './discovery.js';
 import { emptyGraph, normalizeSymbolName, resolveMember, resolveType } from './symbolGraph.js';
 import { analyzeDoubles } from './analyzer.js';
-import { resolveModule } from './moduleResolve.js';
+import { loadTsPathAliases, resolveModule } from './moduleResolve.js';
 import { passesStrictness } from './policy.js';
 import { indexTsFile } from '../extractors/ts/index.js';
 import { extractTsDoubles } from '../extractors/ts/doubles.js';
@@ -239,6 +239,7 @@ export async function runAudit(opts: RuntimeOptions): Promise<AuditResult> {
   );
 
   const graph = emptyGraph();
+  graph.tsPathAliases = await loadTsPathAliases(rootDir, opts.extraExcludes ?? []);
   await indexProduction(productionFiles, rootDir, graph, diagnostics, maxFileBytes, budget);
 
   const { doubles, fileLines } = await extractDoubles(
@@ -309,6 +310,7 @@ export async function verifySymbol(
   const testFiles = restrict(filterByLanguages(discovered.testFiles, opts.languages), opts.paths);
 
   const graph = emptyGraph();
+  graph.tsPathAliases = await loadTsPathAliases(rootDir, opts.extraExcludes ?? []);
   const budget = { bytes: 0, deadline: Date.now() + (opts.maxDurationMs ?? 120_000) };
   await indexProduction(
     productionFiles,
