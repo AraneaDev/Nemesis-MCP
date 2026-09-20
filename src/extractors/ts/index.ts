@@ -147,16 +147,41 @@ const SCOPE_OPENING = new Set([
 ]);
 
 /**
- * True when a declaration sits inside `declare global { ... }`, which augments
- * a type declared elsewhere rather than declaring one here.
+ * True when an interface augments a type declared somewhere else rather than
+ * declaring one here. Three shapes mean the same thing:
+ *
+ * - inside `declare global { ... }`;
+ * - carrying the `declare` modifier of its own, which is ambient;
+ * - at the top level of a declaration file that is a global script, meaning a
+ *   `.d.ts` with no top-level import or export. Everything such a file declares
+ *   merges into the global scope, which is what a `.d.ts` like that is for.
+ *
+ * In every case the members written here are real and the ones the type already
+ * had are invisible to this scan.
  */
-function isGlobalAugmentation(node: import('web-tree-sitter').Node): boolean {
+function isGlobalAugmentation(
+  node: import('web-tree-sitter').Node,
+  inGlobalScriptFile: boolean,
+): boolean {
+  if (inGlobalScriptFile) return true;
   let anc: import('web-tree-sitter').Node | null = node.parent;
   while (anc) {
-    if (anc.type === 'ambient_declaration' && /^declare\s+global\b/.test(anc.text)) return true;
+    if (anc.type === 'ambient_declaration') return true;
     anc = anc.parent;
   }
   return false;
+}
+
+/**
+ * A `.d.ts` with no top-level import or export is a global script: everything
+ * it declares merges into the global scope. One that does import or export is a
+ * module, and its declarations are its own.
+ */
+function isGlobalScriptFile(relFile: string, root: import('web-tree-sitter').Node): boolean {
+  if (!/\.d\.[cm]?ts$/.test(relFile)) return false;
+  return !root.namedChildren.some(
+    (c) => c.type === 'import_statement' || c.type === 'export_statement',
+  );
 }
 
 function fieldsFromClassBody(
@@ -611,6 +636,7 @@ export async function indexTsFile(
   const { root } = parsed;
 
   recordExports(relFile, root, graph);
+  const globalScript = isGlobalScriptFile(relFile, root);
 
   // Pass 1: collect declarations (classes, interfaces, enums, aliases).
   const decls: TsDecl[] = [];
@@ -723,7 +749,7 @@ export async function indexTsFile(
       // somewhere this scan never reads, usually the DOM's. The members here
       // are real, the ones it already had are not visible, and indexing this as
       // the whole of `Window` made every real DOM method read as missing.
-      if (isGlobalAugmentation(d.node)) typeSym.unknownMembers.add('*');
+      if (isGlobalAugmentation(d.node, globalScript)) typeSym.unknownMembers.add('*');
     }
 
     for (const { node: n } of walk(d.node)) {

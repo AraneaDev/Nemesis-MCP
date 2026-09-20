@@ -223,6 +223,36 @@ describe('types this scan cannot enumerate', () => {
     expect(t?.unknownMembers.has('*')).toBe(false);
   });
 
+  it('marks an ambient interface as answering to more than it lists', async () => {
+    // `declare interface Window` augments without a `declare global` wrapper.
+    const t = await typeOf(
+      'declare interface Window {\n  webkitAudioContext?: string;\n}\n',
+      'Window',
+    );
+    expect(t?.unknownMembers.has('*')).toBe(true);
+  });
+
+  it('marks every interface in a global declaration file', async () => {
+    // A `.d.ts` with no import or export is a global script: what it declares
+    // merges into the global scope rather than belonging to the file.
+    const t = await typeOf(
+      'declare type Entity = unknown;\ninterface Window {\n  webkitAudioContext?: string;\n}\n',
+      'Window',
+      'src/types/global.d.ts',
+    );
+    expect(t?.unknownMembers.has('*')).toBe(true);
+  });
+
+  it('leaves a declaration file that is a module enumerable', async () => {
+    // It imports, so it is a module and its interfaces are its own.
+    const t = await typeOf(
+      "import type { X } from './x';\nexport interface Plain {\n  a: number;\n}\n",
+      'Plain',
+      'src/types/api.d.ts',
+    );
+    expect(t?.unknownMembers.has('*')).toBe(false);
+  });
+
   // `type Logger = typeof logger` cannot be followed to the object's members,
   // so the alias was indexed with no members at all and every call on it read
   // as a ghost.
