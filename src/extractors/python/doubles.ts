@@ -2,8 +2,8 @@
 // unittest.mock / pytest-mock double extractor (tree-sitter-python).
 // ---------------------------------------------------------------------------
 
-import type { TestDouble } from '../../core/types.js';
-import { parseSource } from '../../parser/loader.js';
+import type { TestDouble, ScanDiagnostic } from '../../core/types.js';
+import { parseSource, report } from '../../parser/loader.js';
 import { walk, field, unquote } from '../walk.js';
 
 type SyntaxNode = import('web-tree-sitter').Node;
@@ -17,9 +17,18 @@ function splitDottedTarget(dotted: string): { type: string; method: string | nul
   return { type, method };
 }
 
-export async function extractPythonDoubles(relFile: string, source: string): Promise<TestDouble[]> {
+export async function extractPythonDoubles(
+  relFile: string,
+  source: string,
+  diagnostics?: ScanDiagnostic[],
+): Promise<TestDouble[]> {
   const doubles: TestDouble[] = [];
-  const parsed = await parseSource('python', source);
+  const parsed = await parseSource(
+    'python',
+    source,
+    undefined,
+    report(relFile, 'python', diagnostics),
+  );
   const { root } = parsed;
 
   /** variable name → resolved target (from `x = mocker.patch(...)` assignments) */

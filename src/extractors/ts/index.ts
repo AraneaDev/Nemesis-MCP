@@ -9,9 +9,10 @@ import type {
   ParamSymbol,
   SymbolGraph,
   TypeSymbol,
+  ScanDiagnostic,
 } from '../../core/types.js';
 import { addType, addFunction, addModule } from '../../core/symbolGraph.js';
-import { parseSource } from '../../parser/loader.js';
+import { parseSource, report } from '../../parser/loader.js';
 import { walk, field, typeTextOf, visibilityOf } from '../walk.js';
 
 const METHOD_TYPES = new Set([
@@ -620,6 +621,7 @@ export async function indexTsFile(
   relFile: string,
   source: string,
   graph: SymbolGraph,
+  diagnostics?: ScanDiagnostic[],
 ): Promise<void> {
   const ext = path.extname(relFile);
   const grammar =
@@ -628,10 +630,12 @@ export async function indexTsFile(
       : ext === '.js' || ext === '.jsx' || ext === '.mjs' || ext === '.cjs'
         ? 'javascript'
         : 'typescript';
+  const language = grammar === 'javascript' ? 'javascript' : 'typescript';
   const parsed = await parseSource(
-    grammar === 'javascript' ? 'javascript' : 'typescript',
+    language,
     source,
     grammar,
+    report(relFile, language, diagnostics),
   );
   const { root } = parsed;
 

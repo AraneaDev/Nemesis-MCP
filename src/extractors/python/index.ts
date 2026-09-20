@@ -8,9 +8,10 @@ import type {
   ParamSymbol,
   SymbolGraph,
   TypeSymbol,
+  ScanDiagnostic,
 } from '../../core/types.js';
 import { addType, addFunction, addModule } from '../../core/symbolGraph.js';
-import { parseSource } from '../../parser/loader.js';
+import { parseSource, report } from '../../parser/loader.js';
 import { walk, field, typeTextOf } from '../walk.js';
 
 type SyntaxNode = import('web-tree-sitter').Node;
@@ -424,8 +425,14 @@ export async function indexPythonFile(
   relFile: string,
   source: string,
   graph: SymbolGraph,
+  diagnostics?: ScanDiagnostic[],
 ): Promise<void> {
-  const parsed = await parseSource('python', source);
+  const parsed = await parseSource(
+    'python',
+    source,
+    undefined,
+    report(relFile, 'python', diagnostics),
+  );
   const { root } = parsed;
 
   for (const { node } of walk(root)) {

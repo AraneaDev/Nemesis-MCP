@@ -2,15 +2,19 @@
 // mockall / mockiato double extractor (experimental tier).
 // ---------------------------------------------------------------------------
 
-import type { TestDouble } from '../../core/types.js';
-import { parseSource } from '../../parser/loader.js';
+import type { TestDouble, ScanDiagnostic } from '../../core/types.js';
+import { parseSource, report } from '../../parser/loader.js';
 import { walk, field } from '../walk.js';
 
 type SyntaxNode = import('web-tree-sitter').Node;
 
-export async function extractRustDoubles(relFile: string, source: string): Promise<TestDouble[]> {
+export async function extractRustDoubles(
+  relFile: string,
+  source: string,
+  diagnostics?: ScanDiagnostic[],
+): Promise<TestDouble[]> {
   const doubles: TestDouble[] = [];
-  const parsed = await parseSource('rust', source);
+  const parsed = await parseSource('rust', source, undefined, report(relFile, 'rust', diagnostics));
   const { root } = parsed;
 
   // `MockFoo::new()` bound to a variable, so `m.expect_bar()` can be traced
