@@ -128,6 +128,16 @@ function identifiersInTarget(node: SyntaxNode): string[] {
 }
 
 /**
+ * A module rewriting its own namespace at import time: `setattr` against this
+ * module object, or an assignment through `globals()`.
+ *
+ * `setattr` against anything else, a class or an instance, says nothing about
+ * what the module binds.
+ */
+const MODULE_SELF_MUTATION =
+  /\bsetattr\s*\(\s*(?:sys\s*\.\s*modules\s*\[|globals\s*\(\s*\)|__import__\s*\(|module\b)|\bglobals\s*\(\s*\)\s*\[/;
+
+/**
  * Statements that can hold a module-level definition without opening a scope of
  * their own, so a `def` inside one is still a module attribute.
  *
@@ -288,13 +298,18 @@ function moduleSymbolFor(relFile: string, root: SyntaxNode): TypeSymbol {
   // `setattr(sys.modules[__name__], ...)` and `globals()[x] = y` put names in
   // the module that nothing here mentions.
   //
+  // The target is what decides this. `setattr(SomeClass, "x", 1)` mutates that
+  // class, not the module, and reading any `setattr(` at all as a module
+  // mutation silenced every question about the file, including the ones it
+  // could have answered.
+  //
   // Asked of the whole file rather than of each top-level statement. The loop
   // above returns early for a function, a decorated function and a class, so a
   // statement-by-statement test never saw a mutation written inside a
   // top-level helper, which is the ordinary way it is written. That left a
   // definite ghost finding on a name the module really does gain at import
   // time.
-  if (/\bsetattr\s*\(|\bglobals\s*\(\s*\)\s*\[/.test(root.text)) {
+  if (MODULE_SELF_MUTATION.test(root.text)) {
     sym.unknownMembers.add('*');
   }
 
