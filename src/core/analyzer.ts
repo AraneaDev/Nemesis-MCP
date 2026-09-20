@@ -192,8 +192,18 @@ function resolveDoubleType(
     if (exported) return exported;
   }
   // The module resolved and default-exports something, but this scan could
-  // not follow that export to a declared type. Silence beats a guess.
-  return opaqueDefaultExport(mod);
+  // not follow that export to a declared type. Silence beats a guess. But
+  // only stand in when the module actually shows evidence of a default
+  // export: a decidable one already returned above, and an undecidable one
+  // still leaves a trace as a 'default' entry in `methods`, `unknownMembers`
+  // (the extractor's catch-alls for "there was a default export here, but
+  // this scan could not follow it") or `imports` (`export { default } from
+  // './other'`). A module with none of those has no default export at all,
+  // and a default import naming it should stay unresolved rather than
+  // silently standing in for the module's whole namespace.
+  const hasDefaultMember =
+    mod.methods.has('default') || mod.unknownMembers.has('default') || mod.imports?.has('default');
+  return hasDefaultMember ? opaqueDefaultExport(mod) : null;
 }
 
 function classify(

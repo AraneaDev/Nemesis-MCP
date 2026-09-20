@@ -43,6 +43,14 @@ beforeAll(async () => {
       'export default createThing();\n',
   );
 
+  // No default export at all, only a named one. A default import naming
+  // this file binds nothing real, so it must not silently stand in for the
+  // module's own namespace.
+  await writeFile(
+    path.join(root, 'src', 'namedOnly.ts'),
+    'export function namedThing(): number {\n  return 1;\n}\n',
+  );
+
   await writeFile(
     path.join(root, 'tests', 'default-real.test.ts'),
     `import { vi } from 'vitest';\n` +
@@ -83,6 +91,13 @@ beforeAll(async () => {
     path.join(root, 'tests', 'opaque-default.test.ts'),
     `import { vi } from 'vitest';\n` +
       `import thing from '../src/opaque';\n` +
+      `vi.spyOn(thing, 'm').mockReturnValue(2);\n`,
+  );
+
+  await writeFile(
+    path.join(root, 'tests', 'no-default-export.test.ts'),
+    `import { vi } from 'vitest';\n` +
+      `import thing from '../src/namedOnly';\n` +
       `vi.spyOn(thing, 'm').mockReturnValue(2);\n`,
   );
 });
@@ -136,13 +151,28 @@ describe('a default import binds the default export, not the module', () => {
     expect(found).toEqual([]);
   });
 
-  it('still counts every one of these doubles as checked, not unresolved or unknowable', async () => {
+  it('does not resolve a default import against a module with no default export at all', async () => {
+    // `namedOnly.ts` never has `export default` anything. The opaque
+    // fallback used to fire regardless, quietly standing this double in
+    // for the module's own namespace and suppressing every member finding
+    // on it (silence, but the wrong kind: it was never reached to say
+    // nothing about).
     const result = await audit();
-    // Every identifier above is bound to a relative specifier this scan
-    // owns, so none of the seven doubles configured across these fixtures
+    const found = result.violations.filter((v) => v.file === 'tests/no-default-export.test.ts');
+    expect(found).toEqual([]);
+  });
+
+  it('still counts every default-export-bearing double as checked, not unresolved or unknowable', async () => {
+    const result = await audit();
+    // Every identifier above except the no-default-export one is bound to a
+    // relative specifier this scan owns, so none of those seven doubles
     // should ever have been written off as unresolved or a package.
     expect(result.summary.doubles_checked).toBe(7);
-    expect(result.summary.doubles_unresolved).toBe(0);
     expect(result.summary.doubles_unknowable).toBe(0);
+  });
+
+  it('counts the default import naming a module with no default export as unresolved', async () => {
+    const result = await audit();
+    expect(result.summary.doubles_unresolved).toBe(1);
   });
 });
