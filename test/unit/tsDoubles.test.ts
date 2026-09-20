@@ -179,4 +179,35 @@ describe('a receiver that is a module', () => {
     const [d] = await doubles(`${PRELUDE}vi.spyOn(s, 'load').mockReturnValue(1);`);
     expect(d?.targetSymbol).toBe('Svc');
   });
+
+  it('leaves staticReceiver undefined for a namespace import', async () => {
+    const [d] = await doubles(
+      `import * as db from '../src/db.js';\nvi.spyOn(db, 'query').mockReturnValue(1);`,
+    );
+    expect(d?.staticReceiver).toBeUndefined();
+  });
+
+  it('leaves staticReceiver undefined for a require binding', async () => {
+    const [d] = await doubles(
+      `const db = require('../src/db.js');\nvi.spyOn(db, 'query').mockReturnValue(1);`,
+    );
+    expect(d?.staticReceiver).toBeUndefined();
+  });
+
+  it('prefers a local binding that shadows a module import, for vi.spyOn', async () => {
+    // The module map and varTypes both come from one flat, scope-blind walk,
+    // so `db` appears in both. Before modules were tracked, only varTypes was
+    // consulted and this resolved to LocalService; that must not change.
+    const [d] = await doubles(
+      `import * as db from '../src/db.js';\nfunction run() {\n  const db = new LocalService();\n  vi.spyOn(db, 'load').mockReturnValue(1);\n}`,
+    );
+    expect(d?.targetSymbol).toBe('LocalService');
+  });
+
+  it('prefers a local binding that shadows a module import, through vi.mocked', async () => {
+    const [d] = await doubles(
+      `import * as db from '../src/db.js';\nfunction run() {\n  const db = new LocalService();\n  vi.mocked(db.load).mockReturnValue(1);\n}`,
+    );
+    expect(d?.targetSymbol).toBe('LocalService');
+  });
 });

@@ -95,14 +95,21 @@ function spyTargetOf(
     // A tracked variable names its type; anything else is taken at face value,
     // which is how `vi.spyOn(Svc, 'build')` reaches the class's static member.
     // An identifier that names nothing in the graph simply fails to resolve.
+    // Both maps come from one flat, scope-blind walk of the file, so a local
+    // binding that shadows a module import appears in both. `varTypes` wins:
+    // that is the behaviour this tool has always had, and it confines the new
+    // module capability to identifiers with no competing local binding.
     const known = varTypes.get(first.text);
     const asModule = moduleVars.get(first.text);
-    if (asModule) {
+    if (known !== undefined) {
+      target = known;
+      staticReceiver = false;
+    } else if (asModule) {
       target = asModule;
       staticReceiver = undefined; // a module has no instance side
     } else {
-      target = known ?? first.text;
-      staticReceiver = known === undefined;
+      target = first.text;
+      staticReceiver = true;
     }
   } else if (first.type === 'member_expression' || first.type === 'this') {
     target = first.text;
@@ -488,8 +495,13 @@ function adoptTypedMember(
 
   // A module binding names a module; a tracked constructor names a class.
   // Only the first of these existed, so `vi.mocked(db.query)` found nothing.
-  const asModule = moduleVars.get(base.text);
-  const target = asModule ?? varTypes.get(base.text);
+  // Both maps come from one flat, scope-blind walk, so a local binding that
+  // shadows a module import appears in both; `varTypes` wins, matching the
+  // precedence in spyTargetOf and the behaviour this tool had before modules
+  // were tracked at all.
+  const known = varTypes.get(base.text);
+  const asModule = known === undefined ? moduleVars.get(base.text) : undefined;
+  const target = known ?? asModule;
   if (!target) return null;
 
   const rec: SpyRecord = {
