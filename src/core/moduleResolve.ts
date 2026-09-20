@@ -8,7 +8,15 @@ import path from 'node:path';
 import type { SymbolGraph, TsPathAlias, TypeSymbol } from './types.js';
 import { isExcluded, loadIgnoreFile } from './ignore.js';
 
-const EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py'];
+/**
+ * Every extension `discovery.ts` indexes.
+ *
+ * `.mts` and `.cts` were missing from this list while a near-identical copy in
+ * the analyzer was missing `.py`, so each resolver could reach files the other
+ * could not: a relative target pointing at an indexed `.mts` never resolved
+ * through `resolveModule`. One list, one helper, both callers.
+ */
+const EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs', '.py'];
 const TSCONFIG_NAME = 'tsconfig.json';
 const MAX_EXTENDS_DEPTH = 8;
 
@@ -25,7 +33,7 @@ function extensionCandidates(base: string): string[] {
 }
 
 /** Repository-relative paths a relative specifier could mean. */
-function specifierCandidates(fromFile: string, specifier: string): string[] {
+export function specifierCandidates(fromFile: string, specifier: string): string[] {
   const base = path.posix.normalize(
     path.posix.join(path.posix.dirname(fromFile.split(path.sep).join('/')), specifier),
   );

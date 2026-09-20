@@ -23,7 +23,7 @@ import {
 } from './symbolGraph.js';
 import type { ResolveHint } from './symbolGraph.js';
 import { languageForFile } from './discovery.js';
-import { isTsAliasSpecifier, resolveModule } from './moduleResolve.js';
+import { isTsAliasSpecifier, resolveModule, specifierCandidates } from './moduleResolve.js';
 import { PYTHON_BUILTINS } from './pythonBuiltins.js';
 
 const SUPPRESSION = /nemesis-ignore/i;
@@ -720,7 +720,7 @@ function countDouble(
       stats.unknowable += 1;
       return;
     }
-    const scanned = resolveSpecifier(d.file, d.moduleSpecifier).some((candidate) =>
+    const scanned = specifierCandidates(d.file, d.moduleSpecifier).some((candidate) =>
       graph.exportsByFile.has(candidate),
     );
     if (scanned) stats.checked += 1;
@@ -1649,7 +1649,7 @@ function moduleShapeFindings(
 ): Finding[] {
   const findings: Finding[] = [];
   const specifier = d.moduleSpecifier ?? '';
-  for (const candidate of resolveSpecifier(d.file, specifier)) {
+  for (const candidate of specifierCandidates(d.file, specifier)) {
     if (!exportsByFile.has(candidate)) continue;
     const exports = exportsByFile.get(candidate);
     if (!exports) return findings;
@@ -1676,22 +1676,6 @@ function moduleShapeFindings(
     return findings;
   }
   return findings;
-}
-
-const EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs'];
-
-/** Repository-relative paths a relative specifier could mean. */
-function resolveSpecifier(fromFile: string, specifier: string): string[] {
-  const base = path.posix.normalize(
-    path.posix.join(path.posix.dirname(fromFile.split(path.sep).join('/')), specifier),
-  );
-  const stripped = base.replace(/\.(m|c)?js$/, ''); // ESM TypeScript writes .js
-  const out: string[] = [];
-  for (const stem of new Set([base, stripped])) {
-    for (const extension of EXTENSIONS) out.push(stem + extension);
-    for (const extension of EXTENSIONS) out.push(`${stem}/index${extension}`);
-  }
-  return out;
 }
 
 /**
@@ -1737,7 +1721,7 @@ function importedButGone(
     }
     if (!exported) continue;
 
-    for (const candidate of resolveSpecifier(d.file, specifier)) {
+    for (const candidate of specifierCandidates(d.file, specifier)) {
       // The export list is the whole answer where the file has one: it covers
       // functions and values as well as types, so a name of any shape can be
       // asked about. A file that re-exports with `export *` maps to null,

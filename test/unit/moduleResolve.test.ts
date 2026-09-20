@@ -66,6 +66,20 @@ describe('finding the module a target names', () => {
     expect(resolveModule(g, '../src/api', 'tests/a.test.ts')?.file).toBe('src/api/index.ts');
   });
 
+  it('follows a relative specifier to an .mts or .cts file', () => {
+    // Both are discovered and indexed, so a target pointing at one has to be
+    // reachable from here as well.
+    expect(resolveModule(graphWith('src/db.mts'), '../db', 'src/tests/a.test.ts')?.file).toBe(
+      'src/db.mts',
+    );
+    expect(resolveModule(graphWith('src/db.cts'), '../db', 'src/tests/a.test.ts')?.file).toBe(
+      'src/db.cts',
+    );
+    expect(
+      resolveModule(graphWith('src/api/index.mts'), '../src/api', 'tests/a.test.ts')?.file,
+    ).toBe('src/api/index.mts');
+  });
+
   it('says nothing about a package specifier', () => {
     const g = graphWith('src/db.ts');
     expect(resolveModule(g, 'some-package', 'tests/a.test.ts')).toBeNull();
