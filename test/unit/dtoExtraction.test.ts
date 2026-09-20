@@ -19,6 +19,40 @@ describe('cross-language DTO field extraction', () => {
     expect(user?.fields?.get('age')?.required).toBe(false);
   });
 
+  // `self.sites_enabled = ...` in __init__ is how Python declares an instance
+  // attribute. Reading only the class body meant such a name was known to
+  // nothing, so patching it read as patching a method that does not exist.
+  it('extracts Python attributes assigned on self', async () => {
+    const graph = emptyGraph();
+    await indexPythonFile(
+      'src/mgr.py',
+      'class Manager:\n    def __init__(self, sites_enabled):\n        self.sites_enabled = sites_enabled\n        self._cache: dict = {}\n\n    def run(self):\n        self.started = True\n        return 1\n',
+      graph,
+    );
+    const mgr = resolveType(graph, 'Manager');
+    expect(mgr?.fields?.has('sites_enabled')).toBe(true);
+    expect(mgr?.fields?.has('_cache')).toBe(true);
+    // Assigned outside __init__ is still an attribute of the instance.
+    expect(mgr?.fields?.has('started')).toBe(true);
+    // And the methods are still methods, not fields.
+    expect(mgr?.methods.has('run')).toBe(true);
+    expect(mgr?.fields?.has('run')).toBe(false);
+  });
+
+  it('does not take a local variable in a method for an attribute', async () => {
+    const graph = emptyGraph();
+    await indexPythonFile(
+      'src/mgr.py',
+      'class Manager:\n    def run(self):\n        total = 1\n        other.attr = 2\n        return total\n',
+      graph,
+    );
+    const mgr = resolveType(graph, 'Manager');
+    // Nothing was an attribute of the instance, so there is no field map at all.
+    expect(mgr?.fields?.get('total')).toBeUndefined();
+    expect(mgr?.fields?.get('attr')).toBeUndefined();
+    expect(mgr?.methods.has('run')).toBe(true);
+  });
+
   it('extracts Python annotated and initialized attributes', async () => {
     const graph = emptyGraph();
     await indexPythonFile(

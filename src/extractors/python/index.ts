@@ -91,6 +91,27 @@ function fieldsOfClassBody(body: SyntaxNode | null): Map<string, FieldSymbol> | 
     if (!name || (!type && !text.includes('='))) continue;
     fields.set(name, { name, type, required: !text.includes('=') });
   }
+
+  // `self.sites_enabled = sites_enabled` in `__init__` is how Python declares
+  // an instance attribute; the class body often says nothing about it. Reading
+  // only the body left such a name known to nothing, so patching it read as
+  // patching a method the class does not have.
+  //
+  // Any method can add one, not just `__init__`, so the whole body is walked.
+  for (const { node } of walk(body)) {
+    if (node.type !== 'assignment') continue;
+    const left = field(node, 'left');
+    if (left?.type !== 'attribute') continue;
+    const object = field(left, 'object');
+    const attr = field(left, 'attribute');
+    if (object?.text !== 'self' || !attr) continue;
+    if (fields.has(attr.text)) continue; // the class body is the better source
+    fields.set(attr.text, {
+      name: attr.text,
+      type: typeTextOf(node, 'type'),
+      required: false,
+    });
+  }
   return fields.size > 0 ? fields : null;
 }
 
