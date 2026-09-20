@@ -7,8 +7,10 @@
 
 * bind a Python definition made inside a top-level block ([77ae5a0](https://github.com/AraneaDev/Nemesis-MCP/commit/77ae5a0fa51caaba76354cae2a5a604e2bf9711e))
 * count a deleted import as checked rather than unresolved ([fed7905](https://github.com/AraneaDev/Nemesis-MCP/commit/fed7905a625222cabd9ea631db9e518a3f165b72))
+* read a field whose type is an inline object ([692dc4b](https://github.com/AraneaDev/Nemesis-MCP/commit/692dc4b3785708df57a804f49c74286833c00197))
 * read a shorthand method in a CommonJS exports literal ([920e09e](https://github.com/AraneaDev/Nemesis-MCP/commit/920e09ed7bc4a998da839b0c3ea32c9feb436d70))
 * resolve a relative specifier to an .mts or .cts file ([f104f0a](https://github.com/AraneaDev/Nemesis-MCP/commit/f104f0a839cbee1a4800bc7733df70253936f71f))
+* scan the whole tree when the path is given as "." ([afec609](https://github.com/AraneaDev/Nemesis-MCP/commit/afec609ed17d8549e41a9e6c33eddbc7c73fbc6a))
 * the license badge still showed the repository as not found ([a961818](https://github.com/AraneaDev/Nemesis-MCP/commit/a96181814fb6f0b8055d9f44dcc342f966850054))
 
 ## [0.2.2](https://github.com/AraneaDev/Nemesis-MCP/compare/v0.2.1...v0.2.2) (2026-09-20)
