@@ -238,7 +238,14 @@ function factoryKeys(
     // either exports that name or nothing can reach it.
     if (property.type === 'spread_element') continue;
     if (property.type === 'comment') continue;
-    const key = field(property, 'key');
+    // `{ getUser }` names the same key as `{ getUser: getUser }`, but a
+    // shorthand property keeps its name under `name` rather than `key`. Reading
+    // only `key` left the entry nameless and discarded the whole factory, so a
+    // single shorthand key silenced every explicit key beside it.
+    const key =
+      property.type === 'shorthand_property_identifier'
+        ? property
+        : (field(property, 'key') ?? field(property, 'name'));
     if (!key) return null;
     if (key.type === 'computed_property_name') return null;
     keys.push({
