@@ -647,6 +647,18 @@ function countDouble(d: TestDouble, graph: SymbolGraph, stats: AnalyzeStats): vo
     return;
   }
 
+  // An identifier bound to a module import (`import axios from 'axios'`) is a
+  // package by construction when that specifier is non-relative: there is no
+  // contract to check and there never will be. This is stronger than
+  // `isUnknowableTarget`'s guess from the text alone, because the binding
+  // came from an actual import in the file, not from an identifier that
+  // merely looks like a package name. A relative specifier still names a file
+  // this scan owns, so it falls through to the ordinary resolution below.
+  if (d.targetIsModule && !d.targetSymbol.startsWith('.')) {
+    stats.unknowable += 1;
+    return;
+  }
+
   if (isUnknowableTarget(d.targetSymbol)) {
     stats.unknowable += 1;
     return;

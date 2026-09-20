@@ -151,6 +151,16 @@ export interface TestDouble {
   /** `vi.spyOn(obj, 'x', 'get')`: the accessor the spy replaces, if given. */
   accessType?: string;
   /**
+   * True when `targetSymbol` was reached through the module binding map
+   * (`import axios from 'axios'`, `const db = require('./db')`) rather than
+   * taken at face value from an unrecognised identifier. Both end up as the
+   * same string, but only this one is a module specifier by construction: an
+   * untracked identifier stays indistinguishable from a local fake, and only
+   * a real binding earns the "unknowable" classification for a non-relative
+   * specifier.
+   */
+  targetIsModule?: boolean;
+  /**
    * True for the per-key double a `vi.mock` factory value produces, as
    * distinct from the module-shape double the same `vi.mock` call also
    * produces. Both report their findings independently, but a factory-value

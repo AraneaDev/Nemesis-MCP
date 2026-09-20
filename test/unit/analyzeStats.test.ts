@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { analyzeDoubles } from '../../src/core/analyzer.js';
-import { addType, emptyGraph } from '../../src/core/symbolGraph.js';
+import { addModule, addType, emptyGraph } from '../../src/core/symbolGraph.js';
 import type { AnalyzeStats, SymbolGraph, TestDouble } from '../../src/core/types.js';
 
 function graphWithSvc(): SymbolGraph {
@@ -36,6 +36,11 @@ function double(target: string | null, method: string | null): TestDouble {
     returnExpr: null,
     confidence: 'definite',
   };
+}
+
+/** A double reached through the module binding map (`import axios from 'axios'`). */
+function moduleBoundDouble(target: string, method: string): TestDouble {
+  return { ...double(target, method), targetIsModule: true };
 }
 
 function moduleMock(specifier: string, file: string): TestDouble {
@@ -162,5 +167,39 @@ describe('what the analyzer reports having reached', () => {
     // gap. Overstating the gap is the honest direction, so this stays
     // unresolved rather than being guessed into unknowable.
     expect(statsFor([double('requests', 'get')]).unresolved).toBe(1);
+  });
+});
+
+describe('a target reached through the module binding map', () => {
+  it('counts an identifier bound to a non-relative specifier as unknowable', () => {
+    // `import axios from 'axios'; vi.mock('axios'); vi.mocked(axios).get...`:
+    // the binding proves this is a package, not a guess from the text.
+    expect(statsFor([moduleBoundDouble('axios', 'get')]).unknowable).toBe(1);
+  });
+
+  it('still resolves an identifier bound to a relative specifier', () => {
+    // `import db from '../src/db'; db.query.mockResolvedValue(...)`: a
+    // relative binding still names a file this scan owns.
+    const graph = graphWithSvc();
+    addModule(graph, {
+      name: 'src/db.ts',
+      file: 'src/db.ts',
+      kind: 'module',
+      methods: new Map(),
+      unknownMembers: new Set(),
+      extends: [],
+      implements: [],
+      uses: [],
+      line: 1,
+    });
+    const stats = statsForGraph(graph, [moduleBoundDouble('../src/db', 'query')]);
+    expect(stats.checked).toBe(1);
+    expect(stats.unknowable).toBe(0);
+  });
+
+  it('counts an identifier bound to nothing as unresolved, still', () => {
+    // Same text as the module-bound case, but without the binding: this is
+    // still indistinguishable from a local fake, so it stays unresolved.
+    expect(statsFor([double('lodash', 'debounce')]).unresolved).toBe(1);
   });
 });

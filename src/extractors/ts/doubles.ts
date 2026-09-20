@@ -24,6 +24,8 @@ interface SpyRecord {
   fakeParamTypes?: (string | null)[];
   returnsSelf?: boolean;
   staticReceiver?: boolean | undefined;
+  /** `target` was reached through the module binding map, not taken at face value. */
+  targetIsModule?: boolean;
 }
 
 function memberCall(
@@ -81,6 +83,7 @@ function spyTargetOf(
   method: string | null;
   accessType: string | null;
   staticReceiver?: boolean | undefined;
+  targetIsModule?: boolean;
 } {
   const args = field(spyCall, 'arguments');
   if (!args) return { target: null, method: null, accessType: null };
@@ -91,6 +94,7 @@ function spyTargetOf(
   // Whether the spy was pointed at the class itself or at an instance of it.
   // Left undefined where neither is clear, such as `this.svc` or `a.b.c`.
   let staticReceiver: boolean | undefined;
+  let targetIsModule = false;
   if (first.type === 'identifier') {
     // A tracked variable names its type; anything else is taken at face value,
     // which is how `vi.spyOn(Svc, 'build')` reaches the class's static member.
@@ -107,6 +111,7 @@ function spyTargetOf(
     } else if (asModule) {
       target = asModule;
       staticReceiver = undefined; // a module has no instance side
+      targetIsModule = true;
     } else {
       target = first.text;
       staticReceiver = true;
@@ -130,7 +135,13 @@ function spyTargetOf(
   // `vi.spyOn(obj, 'x', 'get')` replaces the accessor rather than a method.
   const third = children[2];
   const accessType = third ? unquote(third.text) : null;
-  return { target, method, accessType, staticReceiver };
+  return {
+    target,
+    method,
+    accessType,
+    staticReceiver,
+    ...(targetIsModule ? { targetIsModule } : {}),
+  };
 }
 
 /** Declared type from `as Foo` / `: Foo` around `node` (walks outward). */
@@ -369,13 +380,18 @@ export async function extractTsDoubles(
     if (!call || call.property !== 'spyOn') continue;
     const rootName = apiRoot(call);
     if (!rootName) continue;
-    const { target, method, accessType, staticReceiver } = spyTargetOf(node, varTypes, moduleVars);
+    const { target, method, accessType, staticReceiver, targetIsModule } = spyTargetOf(
+      node,
+      varTypes,
+      moduleVars,
+    );
     const rec: SpyRecord = {
       framework: `${rootName}.spyOn`,
       target,
       method,
       accessType,
       staticReceiver,
+      ...(targetIsModule ? { targetIsModule } : {}),
       line: node.startPosition.row + 1,
       returnTypeHint: null,
       returnExpr: null,
@@ -541,6 +557,7 @@ export async function extractTsDoubles(
       ...(rec.accessType ? { accessType: rec.accessType } : {}),
       ...(rec.returnsSelf ? { returnsSelf: true } : {}),
       ...(rec.staticReceiver !== undefined ? { staticReceiver: rec.staticReceiver } : {}),
+      ...(rec.targetIsModule ? { targetIsModule: true } : {}),
       confidence: rec.target ? 'definite' : 'warning',
     });
   }
@@ -615,6 +632,7 @@ function adoptTypedMember(
     returnTypeHint: null,
     returnExpr: null,
     assertedArity: null,
+    ...(asModule ? { targetIsModule: true } : {}),
   };
   spies.push(rec);
   return rec;
