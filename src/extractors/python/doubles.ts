@@ -2,7 +2,7 @@
 // unittest.mock / pytest-mock double extractor (tree-sitter-python).
 // ---------------------------------------------------------------------------
 
-import type { TestDouble, ScanDiagnostic } from '../../core/types.js';
+import type { TestDouble, ScanDiagnostic, UnreadMock } from '../../core/types.js';
 import { parseSource, report } from '../../parser/loader.js';
 import { walk, field, unquote } from '../walk.js';
 
@@ -17,10 +17,27 @@ function splitDottedTarget(dotted: string): { type: string; method: string | nul
   return { type, method };
 }
 
+/**
+ * An f-string is a `string` node like any other, so `patch(f"{MOD}.get_user")`
+ * used to reach the target splitter and yield the literal text `f"{MOD}` as a
+ * module name. That double then sat in `unresolved` looking like a target the
+ * scan could not find, which is not what happened: the target was never read.
+ */
+function isInterpolated(node: SyntaxNode): boolean {
+  return node.namedChildren.some((c) => c.type === 'interpolation');
+}
+
 export async function extractPythonDoubles(
   relFile: string,
   source: string,
   diagnostics?: ScanDiagnostic[],
+  /**
+   * Collects the `patch` calls this extractor recognised and then declined to
+   * read. Passed in rather than returned because every caller already has a
+   * `TestDouble[]` in hand, and a site recorded here is a fact about this tool
+   * rather than about the file, so it belongs beside the diagnostics.
+   */
+  unread?: UnreadMock[],
 ): Promise<TestDouble[]> {
   const doubles: TestDouble[] = [];
   const parsed = await parseSource(
@@ -125,6 +142,24 @@ export async function extractPythonDoubles(
     const first = argsNode[0];
     const framework = fnText.startsWith('mocker.') ? 'pytest-mock' : 'unittest.mock';
 
+    // `patch(TARGET)` and `patch(f"{MOD}.get_user")` name a target this cannot
+    // read. They are the commonest way a real patch escapes the audit, and
+    // nothing downstream can tell them from a file that has no patches at all.
+    if (
+      /^(\w+\.)?patch$/.test(fnText) &&
+      first &&
+      (first.type !== 'string' || isInterpolated(first))
+    ) {
+      unread?.push({
+        line: node.startPosition.row + 1,
+        reason:
+          first.type === 'string'
+            ? 'patch target is an interpolated string'
+            : `patch target is a ${first.type}`,
+      });
+      continue;
+    }
+
     // patch('x.y.z') / mocker.patch('x.y.z') / patch('x.y.z', return_value=...)
     if (/^(\w+\.)?patch$/.test(fnText) && first?.type === 'string') {
       const { type, method } = splitDottedTarget(unquote(first.text));
@@ -151,6 +186,13 @@ export async function extractPythonDoubles(
     // patch.object(Type, 'method') / mock.patch.object(Type, 'method')
     if (/^(\w+\.)?patch\.object$/.test(fnText)) {
       const second = argsNode[1];
+      if (second && (second.type !== 'string' || isInterpolated(second))) {
+        unread?.push({
+          line: node.startPosition.row + 1,
+          reason: `patch.object member name is a ${second.type}`,
+        });
+        continue;
+      }
       const method = second ? unquote(second.text) : null;
       const returnKw = keywordValue(node, 'return_value');
       const fakeArity = lambdaArity(keywordValue(node, 'side_effect'));
@@ -169,6 +211,11 @@ export async function extractPythonDoubles(
           returnTypeHint: null,
           returnExpr: returnKw?.text ?? null,
           confidence: 'definite',
+        });
+      } else if (first) {
+        unread?.push({
+          line: node.startPosition.row + 1,
+          reason: `patch.object target is a ${first.type}`,
         });
       }
       continue;

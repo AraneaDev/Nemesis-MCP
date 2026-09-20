@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------------------
 
 import path from 'node:path';
-import type { TestDouble, ScanDiagnostic } from '../../core/types.js';
+import type { TestDouble, ScanDiagnostic, UnreadMock } from '../../core/types.js';
 import { parseSource, report } from '../../parser/loader.js';
 import { walk, field, unquote } from '../walk.js';
 
@@ -240,7 +240,11 @@ function factoryKeys(
     return null;
   }
   if (!body || body.type !== 'object') {
-    if (why) why.reason = 'factory is not an object literal';
+    // Naming the node type is what makes the count actionable. A corpus run that
+    // says `factory returns a call (51)` is a number; one that separates
+    // `factory returns an identifier` from `factory returns a call` says which
+    // of the two is worth teaching the extractor and which never will be.
+    if (why) why.reason = body ? `factory returns a ${body.type}` : 'factory returns nothing';
     return null;
   }
   const keys: Array<{ name: string; line: number; value: SyntaxNode | undefined }> = [];
@@ -360,11 +364,6 @@ export interface TsDoublesResult {
    * what was recognised and not read is what makes the next one visible.
    */
   unread: UnreadMock[];
-}
-
-export interface UnreadMock {
-  line: number;
-  reason: string;
 }
 
 export async function extractTsDoubles(
