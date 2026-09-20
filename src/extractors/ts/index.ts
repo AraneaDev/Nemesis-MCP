@@ -116,6 +116,37 @@ function fieldsFromTypeBody(
 }
 
 /**
+ * True when a node sits at module scope: its ancestry reaches the file root
+ * without passing through a function or a class.
+ *
+ * `exports.x = ...` inside a UMD wrapper or any other closure is not what the
+ * file exports, but collecting those assignments from anywhere in the tree made
+ * them members of the module, with signatures a spy could then be checked
+ * against.
+ */
+function atModuleScope(node: import('web-tree-sitter').Node): boolean {
+  let anc: import('web-tree-sitter').Node | null = node.parent;
+  while (anc) {
+    if (SCOPE_OPENING.has(anc.type)) return false;
+    anc = anc.parent;
+  }
+  return true;
+}
+
+const SCOPE_OPENING = new Set([
+  'function_declaration',
+  'function_expression',
+  'function',
+  'generator_function',
+  'generator_function_declaration',
+  'arrow_function',
+  'method_definition',
+  'class_declaration',
+  'class',
+  'class_body',
+]);
+
+/**
  * True when a declaration sits inside `declare global { ... }`, which augments
  * a type declared elsewhere rather than declaring one here.
  */
@@ -180,6 +211,7 @@ function recordExports(
   // looking like a module that exports nothing at all.
   for (const { node } of walk(root)) {
     if (node.type !== 'assignment_expression') continue;
+    if (!atModuleScope(node)) continue;
     const left = field(node, 'left')?.text ?? '';
     if (!/^(module\.)?exports\b/.test(left)) continue;
     const property = /^(?:module\.)?exports\.([A-Za-z_$][\w$]*)$/.exec(left);
@@ -514,6 +546,7 @@ function moduleSymbolFor(
   // signature this pass can read.
   for (const { node } of walk(root)) {
     if (node.type !== 'assignment_expression') continue;
+    if (!atModuleScope(node)) continue;
     const left = field(node, 'left')?.text ?? '';
     if (!/^(module\.)?exports\b/.test(left)) continue;
     const right = field(node, 'right');

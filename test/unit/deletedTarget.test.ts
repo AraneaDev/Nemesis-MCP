@@ -197,6 +197,12 @@ describe('the export list a module publishes', () => {
     expect([...(names ?? [])].sort()).toEqual(['one', 'two']);
   });
 
+  it('ignores an exports assignment inside a closure', async () => {
+    // A UMD wrapper's inner `exports.fake` is not what the file exports.
+    const names = await exportsOf('exports.real = 1;\n(function () {\n  exports.fake = 2;\n})();');
+    expect([...(names ?? [])].sort()).toEqual(['real']);
+  });
+
   it('gives up when module.exports is not a literal', async () => {
     expect(await exportsOf('module.exports = buildApi();')).toBeNull();
     expect(await exportsOf('module.exports = { ...base, extra: 1 };')).toBeNull();

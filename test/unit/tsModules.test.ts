@@ -167,6 +167,35 @@ describe('the module symbol for a TypeScript file', () => {
     expect(m.methods.has('run')).toBe(false);
     expect(m.unknownMembers.has('run')).toBe(false);
   });
+
+  // The CommonJS assignments were collected from anywhere in the file, so an
+  // `exports.x = ...` inside a UMD wrapper or any other closure became a member
+  // of the module, with a signature. That is not what the file exports, and a
+  // spy on it could draw an arity or return finding from a fake contract.
+  it('does not take an exports assignment inside a closure', async () => {
+    const m = await moduleOf(
+      [
+        'function real(a) {}',
+        'exports.real = real;',
+        '(function (root, factory) {',
+        '  exports.fake = function (x, y, z) {};',
+        '})(this, function () {});',
+      ].join('\n'),
+      'api/umd.js',
+    );
+    expect(m.methods.has('real')).toBe(true);
+    expect(m.methods.has('fake')).toBe(false);
+    expect(m.unknownMembers.has('fake')).toBe(false);
+  });
+
+  it('does not take an exports assignment inside a function body', async () => {
+    const m = await moduleOf(
+      'function install() {\n  module.exports.late = function (q) {};\n}\nmodule.exports.ready = 1;\n',
+      'api/late.js',
+    );
+    expect(m.methods.has('late')).toBe(false);
+    expect(m.unknownMembers.has('ready')).toBe(true);
+  });
 });
 
 describe('types this scan cannot enumerate', () => {
