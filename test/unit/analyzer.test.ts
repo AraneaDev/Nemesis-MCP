@@ -330,6 +330,87 @@ describe('object literal returns checked against declared fields', () => {
   });
 });
 
+// `Promise<DashboardStats['users']>` names one member of an interface, not the
+// interface. The generic-head rule that turns `Record<string, number>` into
+// `Record` also turned this into `DashboardStats`, so a correct stub of the
+// member was compared against the whole interface and every field on both sides
+// was reported.
+describe('a return type that names one member of another type', () => {
+  const STATS = [
+    'export interface DashboardStats {',
+    '  users: { totalUsers: number; activeUsers: number };',
+    '  features: { totalFeatures: number };',
+    '}',
+  ].join('\n');
+
+  async function run(declared: string, literal: string) {
+    const { analyzeDoubles } = await import('../../src/core/analyzer.js');
+    const { indexTsFile } = await import('../../src/extractors/ts/index.js');
+    const graph = emptyGraph();
+    await indexTsFile(
+      'src/svc.ts',
+      `${STATS}\nexport class Svc { getUserStats(): ${declared} { return null as never; } }`,
+      graph,
+    );
+    return analyzeDoubles({
+      doubles: [
+        {
+          framework: 'vi.spyOn',
+          language: 'typescript',
+          file: 'tests/a.test.ts',
+          line: 3,
+          targetSymbol: 'Svc',
+          method: 'getUserStats',
+          methods: [{ name: 'getUserStats', line: 3 }],
+          withArity: null,
+          assertedArity: null,
+          returnTypeHint: null,
+          returnExpr: literal,
+          confidence: 'definite',
+        },
+      ],
+      graph,
+      fileLines: new Map([['tests/a.test.ts', ['', '', '', '']]]),
+      options: { strictness: 'all' },
+    });
+  }
+
+  it('accepts a stub carrying exactly that member', async () => {
+    expect(
+      await run("Promise<DashboardStats['users']>", '{ totalUsers: 1, activeUsers: 2 }'),
+    ).toEqual([]);
+  });
+
+  it('reports a field missing from the member, naming the member', async () => {
+    const found = await run("Promise<DashboardStats['users']>", '{ totalUsers: 1 }');
+    expect(found.map((f) => f.message)).toEqual([
+      "Stub returns an object missing required field 'activeUsers' of DashboardStats['users'].",
+    ]);
+  });
+
+  it('reports a field the member does not have', async () => {
+    const found = await run(
+      "Promise<DashboardStats['users']>",
+      '{ totalUsers: 1, activeUsers: 2, totalFeatures: 3 }',
+    );
+    expect(found.map((f) => f.message)).toEqual([
+      "Stub returns an object with field 'totalFeatures', which does not exist on DashboardStats['users'].",
+    ]);
+  });
+
+  it('says nothing when the member is not an object type', async () => {
+    // Nothing to compare a literal against, so silence rather than a guess.
+    expect(await run("Promise<DashboardStats['missing']>", '{ totalUsers: 1 }')).toEqual([]);
+  });
+
+  it('still checks the whole interface when that is what is declared', async () => {
+    const found = await run('Promise<DashboardStats>', '{ users: {} }');
+    expect(found.map((f) => f.message)).toEqual([
+      "Stub returns an object missing required field 'features' of DashboardStats.",
+    ]);
+  });
+});
+
 describe('an empty object literal states nothing', () => {
   async function runReturning(iface: string, methodReturn: string, literal: string) {
     const { analyzeDoubles } = await import('../../src/core/analyzer.js');

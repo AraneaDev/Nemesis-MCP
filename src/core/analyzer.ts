@@ -22,6 +22,7 @@ import {
   suggestMember,
 } from './symbolGraph.js';
 import type { ResolveHint } from './symbolGraph.js';
+import { fieldsFromTypeText } from '../extractors/ts/index.js';
 import { languageForFile } from './discovery.js';
 import { isTsAliasSpecifier, resolveModule, specifierCandidates } from './moduleResolve.js';
 import { PYTHON_BUILTINS } from './pythonBuiltins.js';
@@ -949,6 +950,14 @@ const DICT =
   /^(dict|mapping|record|map|hashmap|btreemap|object|stdclass|assoc|counter|defaultdict|ordereddict)$/;
 const CALLABLE = /^(callable|closure|function|fn|callback)$/;
 
+/**
+ * A TypeScript indexed access: `Thing['key']`, `Thing["key"]` or `Thing[0]`.
+ *
+ * The bracket holds a literal, which is what tells it apart from an array
+ * (`Thing[]`) and from Python's generic subscript (`list[str]`).
+ */
+const INDEXED_ACCESS = /^([\w$.\\]+)\s*\[\s*(?:(['"`])([^'"`]*)\2|(\d+))\s*]$/;
+
 /** Reduce one alternative (no unions left) to a canonical kind. */
 function canon(raw: string): Canon {
   let t = raw
@@ -973,6 +982,14 @@ function canon(raw: string): Canon {
 
   // TypeScript inline object type / mapped type
   if (/^\{[\s\S]*}$/.test(t)) return { kind: 'dict' };
+
+  // TypeScript indexed access: `DashboardStats['users']` names one MEMBER of a
+  // type, not the type. The generic-head rule below would reduce it to
+  // `DashboardStats` and compare against the whole interface, so a correct stub
+  // of the member was reported as missing every other member. Nothing here can
+  // name the member's own type, so this canonicalises to nothing at all;
+  // `structuralFieldFindings` resolves it properly where it matters.
+  if (INDEXED_ACCESS.test(t)) return { kind: 'wild' };
 
   // Generic head: `Record<string, number>` → `Record`, `list[str]` → `list`.
   const generic = /^([\w\\.$]+)\s*[<[]/.exec(t);
@@ -1174,6 +1191,54 @@ export function objectLiteralKeys(expr: string): string[] | null {
   return keys;
 }
 
+/** The single named type an alternative resolves to, or null. */
+function nominalType(raw: string, graph: SymbolGraph, d: TestDouble): TypeSymbol | null {
+  const canonical = canon(raw);
+  if (canonical.kind !== 'nominal') return null;
+  return resolveType(graph, canonical.name ?? '', {
+    language: d.language,
+    fromFile: d.file,
+  });
+}
+
+/**
+ * The type an indexed access names: `DashboardStats['users']` is the declared
+ * type of that one member, not the interface holding it.
+ *
+ * Returned as a standalone symbol whose `name` is the access as written, so a
+ * finding says which member it is about, and whose ancestry is empty because a
+ * member type inherits nothing.
+ */
+function indexedAccessType(raw: string, graph: SymbolGraph, d: TestDouble): TypeSymbol | null {
+  const m = INDEXED_ACCESS.exec(raw.trim());
+  if (!m) return null;
+  const ownerName = m[1];
+  const key = m[3] ?? m[4];
+  if (!ownerName || key === undefined) return null;
+
+  const owner = resolveType(graph, ownerName, { language: d.language, fromFile: d.file });
+  const memberType = owner?.fields?.get(key)?.type?.trim();
+  if (!owner || !memberType) return null;
+
+  // Only an object type gives a field set to compare against. A member typed
+  // `string` or `Foo[]` has nothing a literal can be checked for.
+  const fields = fieldsFromTypeText(memberType);
+  if (!fields) return null;
+
+  return {
+    name: raw.trim(),
+    file: owner.file,
+    kind: 'type_alias',
+    methods: new Map(),
+    unknownMembers: new Set(),
+    fields,
+    extends: [],
+    implements: [],
+    uses: [],
+    line: owner.line,
+  };
+}
+
 /** Compare an object-literal return against the declared type's fields. */
 function structuralFieldFindings(
   d: TestDouble,
@@ -1191,13 +1256,12 @@ function structuralFieldFindings(
   // Unwrap Promise<T> and friends, then require a single named type.
   const alts = alternatives(declared);
   if (alts.length !== 1) return [];
-  const canonical = canon(alts[0] ?? '');
-  if (canonical.kind !== 'nominal') return [];
+  const only = alts[0] ?? '';
 
-  const type = resolveType(graph, canonical.name ?? '', {
-    language: d.language,
-    fromFile: d.file,
-  });
+  // `DashboardStats['users']` names one member of a type, so the comparison set
+  // is that member's own declared type. Resolving the owner instead reported
+  // every other member of the interface as missing from a correct stub.
+  const type = indexedAccessType(only, graph, d) ?? nominalType(only, graph, d);
   if (!type?.fields || type.fields.size === 0) return [];
   // A type that inherits from outside the scanned tree may declare more
   // fields than we can see, so a missing one proves nothing.
