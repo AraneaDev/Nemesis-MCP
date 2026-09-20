@@ -226,16 +226,11 @@ export async function runAudit(opts: RuntimeOptions): Promise<AuditResult> {
     return selected;
   };
 
-  const restrict = (files: string[]): string[] => {
-    if (!opts.paths || opts.paths.length === 0) return files;
-    return files.filter((f) =>
-      opts.paths!.some((p) => f === p || f.startsWith(p.replace(/\/$/, '') + '/')),
-    );
-  };
-
-  const testFiles = bounded(restrict(filterByLanguages(discovered.testFiles, opts.languages)));
+  const testFiles = bounded(
+    restrict(filterByLanguages(discovered.testFiles, opts.languages), opts.paths),
+  );
   const productionFiles = bounded(
-    restrict(filterByLanguages(discovered.productionFiles, opts.languages)),
+    restrict(filterByLanguages(discovered.productionFiles, opts.languages), opts.paths),
   );
 
   const graph = emptyGraph();
@@ -504,9 +499,25 @@ export async function verifySymbol(
   };
 }
 
+/**
+ * A requested scan path, spelled the way discovery spells the files it finds:
+ * repository-relative, forward slashes, no leading `./`, no trailing slash.
+ *
+ * `.` becomes the empty string, meaning the whole tree. It used to be compared
+ * verbatim against paths like `server/src/a.test.ts`, which never start with
+ * `./`, so `audit .` — the most natural way to ask for everything — matched
+ * nothing and reported a clean, empty audit with a zero exit code.
+ */
+function normalizeScanPath(p: string): string {
+  const posix = p.split(path.sep).join('/');
+  const normalized = path.posix.normalize(posix).replace(/^\.\//, '').replace(/\/+$/, '');
+  return normalized === '.' ? '' : normalized;
+}
+
+/** The files under at least one requested path, or all of them when none was given. */
 function restrict(files: string[], paths?: string[]): string[] {
-  if (!paths || paths.length === 0) return files;
-  return files.filter((f) =>
-    paths.some((p) => f === p || f.startsWith(p.replace(/\/$/, '') + '/')),
-  );
+  const prefixes = (paths ?? []).map(normalizeScanPath);
+  // An empty prefix is the tree root, which every file is under.
+  if (prefixes.length === 0 || prefixes.some((p) => p === '')) return files;
+  return files.filter((f) => prefixes.some((p) => f === p || f.startsWith(`${p}/`)));
 }
