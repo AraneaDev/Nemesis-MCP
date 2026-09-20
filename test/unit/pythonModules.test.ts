@@ -154,4 +154,91 @@ describe('the module symbol for a Python file', () => {
     expect(m.unknownMembers.has('totally_unbound_name')).toBe(false);
     expect(m.methods.has('totally_unbound_name')).toBe(false);
   });
+
+  // A definition at module scope but inside an `if`, `try`, `with` or loop is
+  // still a module attribute. Reading only the top level left such a name
+  // bound by nothing, which made it a definite ghost.
+  describe('a definition inside a top-level block', () => {
+    it('binds a function guarded by a version check', async () => {
+      const m = await moduleOf(
+        'import sys\n\nif sys.version_info >= (3, 11):\n    def parse(s: str) -> int:\n        return 1\n',
+      );
+      expect(m.unknownMembers.has('parse')).toBe(true);
+    });
+
+    it('does not trust the signature of a conditional definition', async () => {
+      // Two branches can declare the same name with different parameters, and
+      // which one survives import is not knowable from the source. The name
+      // exists; its signature does not. Same treatment as a decorated
+      // definition.
+      const m = await moduleOf(
+        'if FAST:\n    def parse(s, encoding):\n        return 1\nelse:\n    def parse(s):\n        return 2\n',
+      );
+      expect(m.unknownMembers.has('parse')).toBe(true);
+      expect(m.methods.has('parse')).toBe(false);
+    });
+
+    it('binds a class defined under a condition', async () => {
+      const m = await moduleOf('if True:\n    class Late:\n        pass\n');
+      expect(m.unknownMembers.has('Late')).toBe(true);
+    });
+
+    it('binds a fallback defined in an except handler', async () => {
+      const m = await moduleOf(
+        'try:\n    from fast import loads\nexcept ImportError:\n    def loads(x):\n        return x\n',
+      );
+      expect(m.unknownMembers.has('loads')).toBe(true);
+    });
+
+    it('binds a decorated definition under a condition', async () => {
+      const m = await moduleOf(
+        'if True:\n    @contextmanager\n    def session():\n        yield\n',
+      );
+      expect(m.unknownMembers.has('session')).toBe(true);
+    });
+
+    it('binds an assignment made under a condition', async () => {
+      const m = await moduleOf('if DEBUG:\n    LEVEL = 10\n');
+      expect(m.unknownMembers.has('LEVEL')).toBe(true);
+    });
+
+    it('binds through with, for, while and match blocks', async () => {
+      const m = await moduleOf(
+        'with ctx():\n    def a():\n        pass\nfor i in r:\n    def b():\n        pass\nwhile x:\n    def c():\n        pass\nmatch v:\n    case 1:\n        def d():\n            pass\n',
+      );
+      for (const name of ['a', 'b', 'c', 'd']) {
+        expect(m.unknownMembers.has(name)).toBe(true);
+      }
+    });
+
+    it('answers to any name when a conditional __getattr__ is defined', async () => {
+      const m = await moduleOf('if True:\n    def __getattr__(name):\n        return 1\n');
+      expect(m.unknownMembers.has('*')).toBe(true);
+    });
+
+    // The pass descends through statements, never into a new scope, so it must
+    // not reach for what a function or a class holds.
+    it('does not bind a function nested inside another function', async () => {
+      const m = await moduleOf(
+        'if True:\n    def outer():\n        def inner():\n            pass\n',
+      );
+      expect(m.unknownMembers.has('outer')).toBe(true);
+      expect(m.unknownMembers.has('inner')).toBe(false);
+    });
+
+    it('does not bind a method of a conditionally defined class', async () => {
+      const m = await moduleOf(
+        'if True:\n    class Repo:\n        def save(self, x):\n            return x\n',
+      );
+      expect(m.unknownMembers.has('Repo')).toBe(true);
+      expect(m.unknownMembers.has('save')).toBe(false);
+      expect(m.methods.has('save')).toBe(false);
+    });
+
+    it('leaves a plain top-level function in methods with its signature', async () => {
+      const m = await moduleOf('def run(value: str) -> bool:\n    return True\n');
+      expect(m.methods.get('run')?.returnType).toBe('bool');
+      expect(m.unknownMembers.has('run')).toBe(false);
+    });
+  });
 });
