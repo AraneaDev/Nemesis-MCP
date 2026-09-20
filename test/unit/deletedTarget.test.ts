@@ -179,6 +179,24 @@ describe('the export list a module publishes', () => {
     expect([...(names ?? [])].sort()).toEqual(['one', 'two']);
   });
 
+  it('reads a method shorthand in the exports literal', async () => {
+    // A shorthand method keeps its name under `name`, not under `key`. Reading
+    // only `key` left the entry nameless, which gave up on the export list for
+    // the whole file and silenced every question about it. The module symbol
+    // builder has always read both fields; these two now agree.
+    const names = await exportsOf(
+      'module.exports = {\n  foo(a, b) { return a + b; },\n  bar: 1,\n};',
+    );
+    expect([...(names ?? [])].sort()).toEqual(['bar', 'foo']);
+  });
+
+  it('reads a getter and an async method in the exports literal', async () => {
+    const names = await exportsOf(
+      'module.exports = {\n  get one() { return 1; },\n  async two() {},\n};',
+    );
+    expect([...(names ?? [])].sort()).toEqual(['one', 'two']);
+  });
+
   it('gives up when module.exports is not a literal', async () => {
     expect(await exportsOf('module.exports = buildApi();')).toBeNull();
     expect(await exportsOf('module.exports = { ...base, extra: 1 };')).toBeNull();

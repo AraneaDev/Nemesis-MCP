@@ -151,6 +151,17 @@ describe('the module symbol for a TypeScript file', () => {
     expect(m.methods.has('getPool')).toBe(true);
   });
 
+  it('reads a bare exports property export', async () => {
+    // `exports.x = ...` without the `module.` prefix. The path works; it had
+    // no test of its own here, only one against the export-list reader.
+    const m = await moduleOf(
+      'function getPool() {}\nexports.getPool = getPool;\nexports.raw = function (z) {};\n',
+      'api/db.js',
+    );
+    expect(m.methods.has('getPool')).toBe(true);
+    expect(m.methods.get('raw')?.params.map((p) => p.name)).toEqual(['z']);
+  });
+
   it('does not take a class method for a module member', async () => {
     const m = await moduleOf('export class Svc {\n  run(): boolean {\n    return true;\n  }\n}\n');
     expect(m.methods.has('run')).toBe(false);

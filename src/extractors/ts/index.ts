@@ -130,7 +130,15 @@ function recordExports(
         complete = false;
         continue;
       }
-      const key = entry.type === 'shorthand_property_identifier' ? entry : field(entry, 'key');
+      // A shorthand method (`{ foo(a, b) {} }`) holds its name under `name`,
+      // not `key`. Without the fallback the entry read as nameless, which gave
+      // up on the export list for the whole file and silenced every question
+      // about it. `moduleSymbolFor` reads both fields, and the two readers of
+      // one construct have to agree.
+      const key =
+        entry.type === 'shorthand_property_identifier'
+          ? entry
+          : (field(entry, 'key') ?? field(entry, 'name'));
       if (!key || key.type === 'computed_property_name') {
         complete = false;
         continue;
