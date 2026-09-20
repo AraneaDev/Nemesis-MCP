@@ -185,6 +185,7 @@ export interface AuditSummary {
   doubles_checked?: number;
   doubles_unresolved?: number;
   doubles_unknowable?: number;
+  doubles_untargeted?: number;
   skipped_languages?: LanguageId[];
   diagnostics?: ScanDiagnostic[];
   partial?: boolean;

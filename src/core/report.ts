@@ -12,7 +12,7 @@ export function renderText(result: AuditResult): string {
   );
   if (s.doubles_checked !== undefined) {
     lines.push(
-      `  ${s.doubles_checked} compared, ${s.doubles_unresolved} unresolved, ${s.doubles_unknowable} with no contract to check.`,
+      `  ${s.doubles_checked} compared, ${s.doubles_unresolved} unresolved, ${s.doubles_unknowable} with no contract to check, ${s.doubles_untargeted} unnamed.`,
     );
   }
   if (s.skipped_languages?.length) {

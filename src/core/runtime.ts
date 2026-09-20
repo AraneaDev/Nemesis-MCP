@@ -268,6 +268,7 @@ export async function runAudit(opts: RuntimeOptions): Promise<AuditResult> {
       doubles_checked: stats.checked,
       doubles_unresolved: stats.unresolved,
       doubles_unknowable: stats.unknowable,
+      doubles_untargeted: stats.noTarget,
       ...(graph.skippedLanguages.length ? { skipped_languages: graph.skippedLanguages } : {}),
       ...(diagnostics.length ? { diagnostics, partial: true } : {}),
     },
