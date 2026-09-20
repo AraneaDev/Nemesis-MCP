@@ -119,3 +119,34 @@ describe('python patch targets the extractor cannot read', () => {
     expect(got).toEqual([{ line: 1, reason: 'patch.object target is a subscript' }]);
   });
 });
+
+// A comment is a named child of the argument list. Counting positional
+// arguments over every named child put the comment in the second position, and
+// `patch.object(mod._x,  # type: ignore\n "run")` took `# type: ignore` for the
+// member name.
+describe('comments inside an argument list', () => {
+  it('does not take a python comment for the member name', async () => {
+    const src = [
+      'patch.object(',
+      '    client,  # type: ignore[attr-defined]',
+      '    "send",',
+      ')',
+    ].join('\n');
+    const ds = await extractPythonDoubles('tests/test_svc.py', src);
+    expect(ds).toHaveLength(1);
+    expect(ds[0]?.method).toBe('send');
+  });
+
+  it('does not take a typescript comment for the specifier', async () => {
+    const src = [
+      'vi.mock(',
+      '  // the api',
+      `  '../api',`,
+      '  () => ({ getUser: vi.fn() }),',
+      ');',
+    ].join('\n');
+    const r = await extractTsDoubles('tests/a.test.ts', src, 'typescript');
+    expect(r.unread).toEqual([]);
+    expect(r.doubles[0]?.targetSymbol).toBe('../api');
+  });
+});
