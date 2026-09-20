@@ -220,6 +220,13 @@ function moduleSymbolFor(
   // is resolved once every import and export in the file has been read.
   const importedLocals = new Map<string, { from: string; name: string }>();
 
+  // Local name -> constructor name, for `const svc = new Svc()`, exported or
+  // not. Consulted when `export default svc` turns out to default-export a
+  // name declared earlier in the file: a default IMPORT binds the module's
+  // default export, not the module, and that export is usually an instance
+  // like this one rather than anything the module itself defines.
+  const constTypeOf = new Map<string, string>();
+
   const fnFromValue = (
     name: string,
     value: import('web-tree-sitter').Node,
@@ -259,6 +266,13 @@ function moduleSymbolFor(
       declared.set(fn.name, fn);
       if (exported) sym.methods.set(fn.name, fn);
       return;
+    }
+    // `const svc = new Svc()`: not callable, but its type is knowable, which
+    // matters if this name turns out to be a bare `export default svc` later
+    // in the file.
+    if (value?.type === 'new_expression') {
+      const ctor = field(value, 'constructor');
+      if (ctor) constTypeOf.set(name.text, ctor.text);
     }
     // A non-function const, e.g. `export const sounds = new SoundManager()` or
     // `export const MAX = 5`: the name is reachable, but nothing here can
@@ -353,6 +367,19 @@ function moduleSymbolFor(
           } else {
             takeNamedDecl(child);
           }
+        } else if (isDefault && child.type === 'identifier') {
+          // `export default svc` — reachable, and its type is knowable when
+          // `svc` was declared earlier in this file as `new Svc()`.
+          sawDefaultTarget = true;
+          const ctor = constTypeOf.get(child.text);
+          if (ctor) sym.defaultExportType = ctor;
+          else sym.unknownMembers.add('default');
+        } else if (isDefault && child.type === 'new_expression') {
+          // `export default new Svc()`, inline rather than through a name.
+          sawDefaultTarget = true;
+          const ctor = field(child, 'constructor');
+          if (ctor) sym.defaultExportType = ctor.text;
+          else sym.unknownMembers.add('default');
         } else if (child.type === 'export_clause') {
           for (const spec of child.namedChildren) {
             if (spec.type !== 'export_specifier') continue;

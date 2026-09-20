@@ -38,9 +38,9 @@ function double(target: string | null, method: string | null): TestDouble {
   };
 }
 
-/** A double reached through the module binding map (`import axios from 'axios'`). */
+/** A double reached through the module binding map (`import * as axios from 'axios'`). */
 function moduleBoundDouble(target: string, method: string): TestDouble {
-  return { ...double(target, method), targetIsModule: true };
+  return { ...double(target, method), moduleBinding: 'namespace' };
 }
 
 function moduleMock(specifier: string, file: string): TestDouble {
@@ -172,13 +172,13 @@ describe('what the analyzer reports having reached', () => {
 
 describe('a target reached through the module binding map', () => {
   it('counts an identifier bound to a non-relative specifier as unknowable', () => {
-    // `import axios from 'axios'; vi.mock('axios'); vi.mocked(axios).get...`:
+    // `import * as axios from 'axios'; axios.get.mockResolvedValue(...)`:
     // the binding proves this is a package, not a guess from the text.
     expect(statsFor([moduleBoundDouble('axios', 'get')]).unknowable).toBe(1);
   });
 
   it('still resolves an identifier bound to a relative specifier', () => {
-    // `import db from '../src/db'; db.query.mockResolvedValue(...)`: a
+    // `import * as db from '../src/db'; db.query.mockResolvedValue(...)`: a
     // relative binding still names a file this scan owns.
     const graph = graphWithSvc();
     addModule(graph, {

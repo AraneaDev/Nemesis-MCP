@@ -66,6 +66,17 @@ export interface TypeSymbol {
    * module as much as a defined one is.
    */
   imports?: Map<string, { from: string; name: string }>;
+  /**
+   * Module only (TypeScript/JavaScript). The type a bare `export default
+   * <identifier>` or `export default new <Ctor>()` names, when the default
+   * export's shape is decidable statically. A default IMPORT binds this,
+   * not the module: `import x from './svc'` means whatever the module
+   * default-exports, which is usually a class instance and never the
+   * module's own top-level members. Left unset when the default export is
+   * anything this scan cannot follow to a declared type: a call, a
+   * conditional, an object literal, an anonymous class, and so on.
+   */
+  defaultExportType?: string;
   line: number;
 }
 
@@ -170,15 +181,21 @@ export interface TestDouble {
   /** `vi.spyOn(obj, 'x', 'get')`: the accessor the spy replaces, if given. */
   accessType?: string;
   /**
-   * True when `targetSymbol` was reached through the module binding map
-   * (`import axios from 'axios'`, `const db = require('./db')`) rather than
-   * taken at face value from an unrecognised identifier. Both end up as the
-   * same string, but only this one is a module specifier by construction: an
-   * untracked identifier stays indistinguishable from a local fake, and only
-   * a real binding earns the "unknowable" classification for a non-relative
-   * specifier.
+   * Set when `targetSymbol` was reached through the module binding map
+   * (`import axios from 'axios'`, `import * as db from './db'`,
+   * `const db = require('./db')`) rather than taken at face value from an
+   * unrecognised identifier. An untracked identifier stays indistinguishable
+   * from a local fake, so only a real binding earns the "unknowable"
+   * classification for a non-relative specifier.
+   *
+   * The two kinds resolve differently. `'namespace'` (a namespace import or
+   * `require`) names the module itself, so `targetSymbol` is compared
+   * against the module's own top-level members. `'default'` (a default
+   * import) names the module's default EXPORT instead, which is usually a
+   * class instance and never a top-level member of the module; resolving it
+   * requires following that export to its own type.
    */
-  targetIsModule?: boolean;
+  moduleBinding?: 'namespace' | 'default';
   /**
    * True for the per-key double a `vi.mock` factory value produces, as
    * distinct from the module-shape double the same `vi.mock` call also
