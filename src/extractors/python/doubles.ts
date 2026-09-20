@@ -94,11 +94,16 @@ export async function extractPythonDoubles(
         const fnText = fn?.text ?? '';
         if (/^(\w+\.)?patch(_object|_multiple)?$/.test(fnText) || fnText === 'create_autospec') {
           const args = field(right, 'arguments');
-          const first = args?.namedChildren[0];
+          const first = (args?.namedChildren ?? []).filter((a) => a.type !== 'comment')[0];
           let target: string | null = null;
           let method: string | null = null;
           if (first) {
-            if (first.type === 'string') {
+            // A patch assigned to a variable takes this path rather than the
+            // call path below, so it needs the same interpolation guard. Without
+            // it, `m = patch(f"{MODULE}.get_user")` put `f"{MODULE}` into the
+            // variable map and every assertion made through `m` afterwards was
+            // compared against a module by that name.
+            if (first.type === 'string' && !isInterpolated(first)) {
               const split = splitDottedTarget(unquote(first.text));
               target = split.type;
               method = split.method;

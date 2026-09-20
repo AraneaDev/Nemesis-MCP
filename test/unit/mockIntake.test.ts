@@ -114,6 +114,23 @@ describe('python patch targets the extractor cannot read', () => {
     expect(got).toEqual([{ line: 1, reason: 'patch target is a identifier' }]);
   });
 
+  // A patch assigned to a variable takes a different path through the extractor,
+  // and that path read the f-string as a literal after the call path had stopped
+  // doing so. `f"{MODULE}` went into the variable map, and the assertion two
+  // lines below built a double against it.
+  it('does not carry an interpolated target into a variable', async () => {
+    const src = [
+      'def test_x():',
+      '    m = patch(f"{MODULE}.get_user")',
+      '    m.return_value = 7',
+    ].join('\n');
+    const unread: UnreadMock[] = [];
+    const ds = await extractPythonDoubles('tests/test_x.py', src, undefined, unread);
+    expect(ds).toEqual([]);
+    // Still counted, so the site is visible rather than merely silent.
+    expect(unread).toEqual([{ line: 2, reason: 'patch target is an interpolated string' }]);
+  });
+
   it('counts a patch.object whose target is subscripted', async () => {
     const got = await pyUnread(`patch.object(registry['client'], 'send')`);
     expect(got).toEqual([{ line: 1, reason: 'patch.object target is a subscript' }]);
