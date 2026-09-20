@@ -15,6 +15,13 @@ export function renderText(result: AuditResult): string {
       `  ${s.doubles_checked} compared, ${s.doubles_unresolved} unresolved, ${s.doubles_unknowable} with no contract to check, ${s.doubles_untargeted} unnamed.`,
     );
   }
+  if (s.mocks_unread) {
+    const by = Object.entries(s.mocks_unread_reasons ?? {})
+      .sort((a, b) => b[1] - a[1])
+      .map(([reason, n]) => `${reason} (${n})`)
+      .join(', ');
+    lines.push(`  ${s.mocks_unread} mock site(s) recognised but not read: ${by}`);
+  }
   if (s.skipped_languages?.length) {
     lines.push(`Skipped languages (grammar load failed): ${s.skipped_languages.join(', ')}`);
   }
