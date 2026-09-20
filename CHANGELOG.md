@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.1](https://github.com/AraneaDev/Nemesis-MCP/compare/v0.2.0...v0.2.1) (2026-09-20)
+
+
+### Fixes
+
+* stop counting a vi.mock factory value as a second double ([1cb23f5](https://github.com/AraneaDev/Nemesis-MCP/commit/1cb23f5cda128dd4efe4106902b98ec70b144746))
+* stop letting the Python builtin exemption define confidence and swallow real ghosts ([c8c424c](https://github.com/AraneaDev/Nemesis-MCP/commit/c8c424c64cb4ebdd0826a44739cbfd0743cdc25b))
+* stop treating a TypeScript import as a re-export ([349730c](https://github.com/AraneaDev/Nemesis-MCP/commit/349730cd3cc5fa0a6fad7a0d95d4220fe04ecd39))
+* the same missing factory key was reported twice ([9e3025f](https://github.com/AraneaDev/Nemesis-MCP/commit/9e3025f3bb7e0f1dfd5053c405d162463b105e3f))
+* three places the tool was wrong in public ([ec8c537](https://github.com/AraneaDev/Nemesis-MCP/commit/ec8c5373cab90f1526e1b2927e06a5d298a9d979))
+
 ## [0.2.0](https://github.com/AraneaDev/Nemesis-MCP/compare/v0.1.0...v0.2.0) (2026-09-20)
 
 
