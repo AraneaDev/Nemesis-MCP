@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { extractPythonDoubles } from '../../src/extractors/python/doubles.js';
 import { indexPythonFile } from '../../src/extractors/python/index.js';
 import { emptyGraph, resolveType } from '../../src/core/symbolGraph.js';
+import { analyzeDoubles } from '../../src/core/analyzer.js';
 
 const doubles = (src: string) => extractPythonDoubles('tests/test_svc.py', src);
 const configured = async (src: string) =>
@@ -169,5 +170,77 @@ describe('patch.multiple', () => {
       'def test_x(mocker):\n    mocker.patch.multiple(Vault, autospec=True)\n',
     );
     expect(doubles).toEqual([]);
+  });
+});
+
+// `patch("pkg.mod.obj.method")` names an attribute of a module far more often
+// than it names a submodule. Resolving only submodules left this whole idiom
+// unchecked: in one repository it was most of the corpus.
+describe('a patch target naming an object a module holds', () => {
+  async function run(
+    files: Record<string, string>,
+    patchTarget: string,
+    stats?: { checked: number; unresolved: number; unknowable: number; noTarget: number },
+  ) {
+    const g = emptyGraph();
+    for (const [f, src] of Object.entries(files)) await indexPythonFile(f, src, g);
+    const src = `from unittest.mock import patch\ndef t():\n    with patch('${patchTarget}'): pass`;
+    const ds = await extractPythonDoubles('tests/test_x.py', src);
+    return analyzeDoubles({
+      doubles: ds,
+      graph: g,
+      fileLines: new Map([['tests/test_x.py', src.split('\n')]]),
+      options: { strictness: 'all' },
+      ...(stats ? { stats } : {}),
+    });
+  }
+
+  const BUS = 'class EventBus:\n    def publish(self, topic):\n        return True\n';
+
+  it('follows the module attribute to the class it was built from', async () => {
+    const stats = { checked: 0, unresolved: 0, unknowable: 0, noTarget: 0 };
+    const found = await run(
+      {
+        'core/tasks/event_bus.py': `${BUS}\nevent_bus = EventBus()\n`,
+        'core/jobs.py': 'from core.tasks.event_bus import event_bus\n',
+      },
+      'core.jobs.event_bus.publish',
+      stats,
+    );
+    expect(stats.checked).toBe(1);
+    expect(stats.unresolved).toBe(0);
+    expect(found).toEqual([]);
+  });
+
+  it('reports a member the object it found does not have', async () => {
+    const found = await run(
+      {
+        'core/tasks/event_bus.py': `${BUS}\nevent_bus = EventBus()\n`,
+        'core/jobs.py': 'from core.tasks.event_bus import event_bus\n',
+      },
+      'core.jobs.event_bus.emit',
+    );
+    expect(found.map((f) => f.message)).toEqual(["Method 'emit' does not exist on 'EventBus'."]);
+  });
+
+  it('counts an attribute bound from outside the scan as having no contract', async () => {
+    // `patch("core.jobs.asyncio.sleep")` reaches the stdlib asyncio bound in
+    // that module. It is not a target this scan failed to find.
+    const stats = { checked: 0, unresolved: 0, unknowable: 0, noTarget: 0 };
+    const found = await run(
+      { 'core/jobs.py': 'import asyncio\n\ndef run():\n    pass\n' },
+      'core.jobs.asyncio.sleep',
+      stats,
+    );
+    expect(stats.unknowable).toBe(1);
+    expect(stats.unresolved).toBe(0);
+    expect(found).toEqual([]);
+  });
+
+  it('still counts a name the module does not bind as unresolved', async () => {
+    const stats = { checked: 0, unresolved: 0, unknowable: 0, noTarget: 0 };
+    await run({ 'core/jobs.py': 'def run():\n    pass\n' }, 'core.jobs.nothing_here.x', stats);
+    expect(stats.unresolved).toBe(1);
+    expect(stats.unknowable).toBe(0);
   });
 });
