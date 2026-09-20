@@ -294,7 +294,59 @@ export async function extractPythonDoubles(relFile: string, source: string): Pro
     }
   }
 
+  // `patch.object(overrides, "stored_value")` names something this test file
+  // imported. Production declares nothing under that bare word, so without the
+  // test's own imports the target matches nothing at all.
+  const imported = testFileImports(root);
+  for (const d of doubles) {
+    const t = d.targetSymbol;
+    if (!t || t.includes('.')) continue;
+    const from = imported.get(t);
+    if (from) d.targetImportedFrom = from;
+  }
+
   return doubles;
+}
+
+/**
+ * Where each name a test file imports came from, as a dotted path.
+ *
+ * `from core.system.app_config import overrides` binds `overrides` to
+ * `core.system.app_config.overrides`; `import smtplib` binds `smtplib` to
+ * itself. Aliases bind under the alias, which is the name the test then uses.
+ */
+function testFileImports(root: SyntaxNode): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const { node } of walk(root)) {
+    if (node.type === 'import_from_statement') {
+      const source = node.namedChildren[0];
+      if (!source || source.type === 'relative_import') continue;
+      for (const spec of node.namedChildren.slice(1)) {
+        if (spec.type === 'aliased_import') {
+          const alias = field(spec, 'alias')?.text;
+          const name = field(spec, 'name')?.text;
+          if (alias && name) out.set(alias, `${source.text}.${name}`);
+        } else if (spec.type === 'dotted_name') {
+          out.set(spec.text, `${source.text}.${spec.text}`);
+        }
+      }
+      continue;
+    }
+    if (node.type === 'import_statement') {
+      for (const spec of node.namedChildren) {
+        if (spec.type === 'aliased_import') {
+          const alias = field(spec, 'alias')?.text;
+          const name = field(spec, 'name')?.text;
+          if (alias && name) out.set(alias, name);
+        } else if (spec.type === 'dotted_name') {
+          // `import os.path` binds `os`, and the name stands for itself.
+          const head = spec.text.split('.')[0];
+          if (head) out.set(head, head);
+        }
+      }
+    }
+  }
+  return out;
 }
 
 /** Value of a keyword argument in a call node, if present. */

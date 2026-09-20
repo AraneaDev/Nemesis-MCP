@@ -202,6 +202,16 @@ export interface TestDouble {
    */
   moduleBinding?: 'namespace' | 'default';
   /**
+   * Where the TEST file imported a bare target from, as a dotted path.
+   *
+   * `patch.object(overrides, "stored_value")` names something the test imported
+   * rather than anything the production tree declares under that word. Without
+   * the import the target is a bare name matching nothing, and the double is
+   * counted as never compared. Set by the extractor, which has the test's own
+   * import statements in front of it.
+   */
+  targetImportedFrom?: string;
+  /**
    * True for the per-key double a `vi.mock` factory value produces, as
    * distinct from the module-shape double the same `vi.mock` call also
    * produces. A factory-value double is a second view of a key the

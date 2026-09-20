@@ -244,3 +244,84 @@ describe('a patch target naming an object a module holds', () => {
     expect(stats.unknowable).toBe(0);
   });
 });
+
+// `patch.object(overrides, "_stored_value")` names something the TEST file
+// imported. Without reading the test's own imports the target is a bare word
+// that matches nothing, and the double is counted as never compared.
+describe('a patch target the test file imported', () => {
+  async function run(
+    files: Record<string, string>,
+    testSrc: string,
+    stats?: { checked: number; unresolved: number; unknowable: number; noTarget: number },
+  ) {
+    const g = emptyGraph();
+    for (const [f, src] of Object.entries(files)) await indexPythonFile(f, src, g);
+    const ds = await extractPythonDoubles('tests/test_x.py', testSrc);
+    return analyzeDoubles({
+      doubles: ds,
+      graph: g,
+      fileLines: new Map([['tests/test_x.py', testSrc.split('\n')]]),
+      options: { strictness: 'all' },
+      ...(stats ? { stats } : {}),
+    });
+  }
+
+  // The class name must not be the object name in another case: symbol lookup
+  // is case-insensitive, so `overrides` would match a class `Overrides` by
+  // accident and the test would pass without the import ever being read.
+  const CONFIG =
+    'class AppSettings:\n    def stored_value(self, key):\n        return None\n\noverrides = AppSettings()\n';
+
+  it('follows a from-import to the object it names', async () => {
+    const stats = { checked: 0, unresolved: 0, unknowable: 0, noTarget: 0 };
+    const found = await run(
+      { 'core/system/app_config.py': CONFIG },
+      'from core.system.app_config import overrides\nfrom unittest.mock import patch\n\ndef t():\n    with patch.object(overrides, "stored_value"): pass\n',
+      stats,
+    );
+    expect(stats.checked).toBe(1);
+    expect(stats.unresolved).toBe(0);
+    expect(found).toEqual([]);
+  });
+
+  it('reports a member the imported object does not have', async () => {
+    const found = await run(
+      { 'core/system/app_config.py': CONFIG },
+      'from core.system.app_config import overrides\nfrom unittest.mock import patch\n\ndef t():\n    with patch.object(overrides, "gone"): pass\n',
+    );
+    expect(found.map((f) => f.message)).toEqual(["Method 'gone' does not exist on 'AppSettings'."]);
+  });
+
+  it('follows an aliased import', async () => {
+    const stats = { checked: 0, unresolved: 0, unknowable: 0, noTarget: 0 };
+    await run(
+      { 'core/system/app_config.py': CONFIG },
+      'from core.system.app_config import overrides as ov\nfrom unittest.mock import patch\n\ndef t():\n    with patch.object(ov, "stored_value"): pass\n',
+      stats,
+    );
+    expect(stats.checked).toBe(1);
+  });
+
+  it('counts a target imported from outside the scan as having no contract', async () => {
+    const stats = { checked: 0, unresolved: 0, unknowable: 0, noTarget: 0 };
+    const found = await run(
+      {},
+      'import smtplib\nfrom unittest.mock import patch\n\ndef t():\n    with patch.object(smtplib, "SMTP"): pass\n',
+      stats,
+    );
+    expect(stats.unknowable).toBe(1);
+    expect(stats.unresolved).toBe(0);
+    expect(found).toEqual([]);
+  });
+
+  it('leaves a bare name the test never imported unresolved', async () => {
+    const stats = { checked: 0, unresolved: 0, unknowable: 0, noTarget: 0 };
+    await run(
+      {},
+      'from unittest.mock import patch\n\ndef t():\n    mgr = Manager()\n    with patch.object(mgr, "run"): pass\n',
+      stats,
+    );
+    expect(stats.unresolved).toBe(1);
+    expect(stats.unknowable).toBe(0);
+  });
+});

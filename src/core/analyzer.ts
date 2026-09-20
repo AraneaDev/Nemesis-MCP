@@ -236,6 +236,29 @@ function moduleAttributeType(
   return null;
 }
 
+/**
+ * What a bare target the test file imported actually names.
+ *
+ * `patch.object(overrides, "stored_value")` says nothing production declares
+ * under the word `overrides`; the test's own
+ * `from core.system.app_config import overrides` is what names it. The
+ * extractor records that path, and the same three routes apply to it as to any
+ * other target: a type, a module, or an object a module holds.
+ */
+function importedTargetType(
+  d: TestDouble,
+  graph: SymbolGraph,
+  hint: ResolveHint,
+): TypeSymbol | null {
+  const from = d.targetImportedFrom;
+  if (!from) return null;
+  return (
+    resolveType(graph, from, hint) ??
+    resolveModule(graph, from, d.file) ??
+    moduleAttributeType(graph, from, d.file, hint)
+  );
+}
+
 function resolveDoubleType(
   d: TestDouble,
   graph: SymbolGraph,
@@ -247,7 +270,8 @@ function resolveDoubleType(
   if (d.moduleBinding !== 'default') {
     return (
       resolveModule(graph, d.targetSymbol!, d.file) ??
-      moduleAttributeType(graph, d.targetSymbol!, d.file, hint)
+      moduleAttributeType(graph, d.targetSymbol!, d.file, hint) ??
+      importedTargetType(d, graph, hint)
     );
   }
 
@@ -871,6 +895,15 @@ function countDouble(
   // target that really has gone missing.
   const attribute = moduleAttribute(graph, d.targetSymbol, d.file);
   if (attribute?.bound) {
+    stats.unknowable += 1;
+    return;
+  }
+
+  // The test imported this name from somewhere the scan does not reach:
+  // `import smtplib` and then `patch.object(smtplib, "SMTP")`. The target is
+  // accounted for and there is no contract behind it, which is not the same as
+  // having failed to find it.
+  if (d.targetImportedFrom) {
     stats.unknowable += 1;
     return;
   }
