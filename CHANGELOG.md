@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.2.2](https://github.com/AraneaDev/Nemesis-MCP/compare/v0.2.1...v0.2.2) (2026-09-20)
+
+
+### Fixes
+
+* do not stand a default import in for a module with no default export ([41ec7bd](https://github.com/AraneaDev/Nemesis-MCP/commit/41ec7bd60d46904f2fa5bae68af8dcfbec68012a))
+* implement TypeScript's exact-before-wildcard tsconfig alias precedence ([56c906d](https://github.com/AraneaDev/Nemesis-MCP/commit/56c906daa08a6d6b146de59dfd41c1eb86846b0d))
+* mark a default-imported member configured through vi.mocked as instance ([270b624](https://github.com/AraneaDev/Nemesis-MCP/commit/270b62489fb9d1c1d93ddb82d5c60960e97d0933))
+* resolve a double before applying the text-based unknowable checks ([d35a381](https://github.com/AraneaDev/Nemesis-MCP/commit/d35a381d0acfb5610e64c143dce5673472d7242b))
+* resolve inherited tsconfig baseUrl and paths against the declaring config ([db76402](https://github.com/AraneaDev/Nemesis-MCP/commit/db764029dc29a0e25a531441e030ee00fcbfaa59))
+* resolve TypeScript path aliases when finding a double's module ([339cc4a](https://github.com/AraneaDev/Nemesis-MCP/commit/339cc4a9f494bee698597fa438cbdd379ba44f2b))
+* stop counting a module-bound package identifier as unresolved ([94d6383](https://github.com/AraneaDev/Nemesis-MCP/commit/94d638395f075c41b8301d278ab26f630e758382))
+* stop treating a default import as the module it comes from ([e0580d2](https://github.com/AraneaDev/Nemesis-MCP/commit/e0580d28f4f6cb8fab3c4a0b2576aa3b9416a6fc))
+
 ## [0.2.1](https://github.com/AraneaDev/Nemesis-MCP/compare/v0.2.0...v0.2.1) (2026-09-20)
 
 
