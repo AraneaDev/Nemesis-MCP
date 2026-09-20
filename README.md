@@ -100,7 +100,7 @@ The summary says how much of the scan it actually compared:
 
 ```
 Scanned 174 test file(s), inspected 4772 double(s).
-  2772 compared, 1521 unresolved, 475 with no contract to check.
+  2772 compared, 1521 unresolved, 475 with no contract to check, 4 unnamed.
 ```
 
 That second line matters more than the first. A double whose target cannot be resolved was counted,

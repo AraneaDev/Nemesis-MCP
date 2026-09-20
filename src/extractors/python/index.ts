@@ -282,12 +282,19 @@ function moduleSymbolFor(relFile: string, root: SyntaxNode): TypeSymbol {
         }
       }
     }
+  }
 
-    // `setattr(sys.modules[__name__], ...)` and `globals()[x] = y` put names in
-    // the module that nothing here mentions.
-    if (/\bsetattr\s*\(|\bglobals\s*\(\s*\)\s*\[/.test(child.text)) {
-      sym.unknownMembers.add('*');
-    }
+  // `setattr(sys.modules[__name__], ...)` and `globals()[x] = y` put names in
+  // the module that nothing here mentions.
+  //
+  // Asked of the whole file rather than of each top-level statement. The loop
+  // above returns early for a function, a decorated function and a class, so a
+  // statement-by-statement test never saw a mutation written inside a
+  // top-level helper, which is the ordinary way it is written. That left a
+  // definite ghost finding on a name the module really does gain at import
+  // time.
+  if (/\bsetattr\s*\(|\bglobals\s*\(\s*\)\s*\[/.test(root.text)) {
+    sym.unknownMembers.add('*');
   }
 
   // Imports are walked rather than read off the top level, because
