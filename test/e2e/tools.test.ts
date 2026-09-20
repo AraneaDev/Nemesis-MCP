@@ -45,6 +45,41 @@ describe('nemesis verify-symbol end-to-end', () => {
     expect(stdout).toContain('could not be resolved');
     expect(status).toBe(0);
   }, 120_000);
+
+  it('attributes a finding to the double that actually owns it, not a same-name double elsewhere in the file', () => {
+    // fixtures/experiments/python/inherited-collision: `Derived` inherits
+    // `save` from `Base` and is patched with a bad arity (owner=Base). A
+    // second, unrelated class `Other` also defines `save` and is patched
+    // right after it, cleanly. The two doubles share a method name in the
+    // same file, which used to be enough for the old `ownedHere` fallback to
+    // treat them as interchangeable by name alone: it cleared the guilty
+    // double (line 8, Derived.save) and pinned the ARITY_MISMATCH on the
+    // innocent one instead (line 13, Other.save).
+    const { status, stdout } = runCli(
+      ['verify-symbol', 'Base', '--strictness=all', '--json'],
+      root,
+    );
+    expect(status).toBe(1);
+    const report = JSON.parse(stdout) as {
+      doubles: Array<{ line: number; valid: boolean; violations: Array<{ type: string }> }>;
+    };
+    // `Other.save` does not belong to `Base` at all (resolveMember(Other,
+    // 'save') owns itself, not Base), so a correct answer never lists it
+    // under `Base` in the first place.
+    expect(report.doubles.map((d) => d.line)).toEqual([8]);
+    const guilty = report.doubles[0];
+    expect(guilty?.valid).toBe(false);
+    expect(guilty?.violations).toHaveLength(1);
+    expect(guilty?.violations[0]?.type).toBe('ARITY_MISMATCH');
+
+    // The unrelated `Other.save` double, asked about directly, is clean.
+    const other = runCli(['verify-symbol', 'Other', '--strictness=all', '--json'], root);
+    const otherReport = JSON.parse(other.stdout) as {
+      doubles: Array<{ line: number; valid: boolean }>;
+    };
+    const otherDouble = otherReport.doubles.find((d) => d.line === 13);
+    expect(otherDouble, 'expected the Other.save double (line 13) to be reported').toBeTruthy();
+  }, 120_000);
 });
 
 describe('nemesis CLI argument handling', () => {
