@@ -17,7 +17,7 @@ import type {
   ScanDiagnostic,
 } from './types.js';
 import { discoverFiles, filterByLanguages } from './discovery.js';
-import { emptyGraph, normalizeSymbolName } from './symbolGraph.js';
+import { emptyGraph, normalizeSymbolName, resolveMember, resolveType } from './symbolGraph.js';
 import { analyzeDoubles } from './analyzer.js';
 import { resolveModule } from './moduleResolve.js';
 import { passesStrictness } from './policy.js';
@@ -396,15 +396,26 @@ export async function verifySymbol(
   // audit is printing. So: any double that configures a member this symbol
   // owns is a candidate too.
   const ownedHere = findings.filter((f) => f.target.split('::')[0] === found?.name);
-  if (ownedHere.length > 0) {
+  if (ownedHere.length > 0 && found) {
     const already = new Set(candidates.map((c) => c.double));
     for (const d of doubles) {
       if (already.has(d)) continue;
+      if (!d.targetSymbol) continue;
       const names = new Set(d.methods.map((m) => m.name));
+      const dHint = { language: d.language, fromFile: d.file };
+      // A textual match on the method name is not enough: `Other.save` and
+      // `Derived.save` share a name but nothing else. The double only
+      // belongs to `found` if resolving its own target and then resolving
+      // the member on that target actually lands on `found`.
+      const dTarget =
+        resolveType(graph, d.targetSymbol, dHint) ?? resolveModule(graph, d.targetSymbol, d.file);
+      if (!dTarget) continue;
       const owns = ownedHere.some((f) => {
         const idx = f.target.indexOf('::');
         const member = idx >= 0 ? f.target.slice(idx + 2) : null;
-        return f.file === d.file && member !== null && names.has(member);
+        if (f.file !== d.file || member === null || !names.has(member)) return false;
+        const resolved = resolveMember(graph, dTarget, member, 0, dHint);
+        return resolved?.owner === found;
       });
       if (owns) candidates.push({ double: d, methodNames: names });
     }
@@ -414,6 +425,15 @@ export async function verifySymbol(
   // configures the finding's method wins; otherwise the closest double at or
   // above the finding's line (chain setters/assertions live below the spy).
   const WINDOW = 8;
+  // A negative `dist` means the double sits below the finding, so it cannot
+  // be the thing that produced it. Rank it worse than any non-negative
+  // distance; within the same sign, the smallest distance still wins.
+  const isBetterDist = (dist: number, bestDist: number): boolean => {
+    const nonNeg = dist >= 0;
+    const bestNonNeg = bestDist >= 0;
+    if (nonNeg !== bestNonNeg) return nonNeg;
+    return dist < bestDist;
+  };
   const attribution = new Map<Finding, number>(); // finding → candidate index
   findings.forEach((f, fi) => {
     let best = -1;
@@ -433,7 +453,7 @@ export async function verifySymbol(
         bestMethodMatch = true;
         return;
       }
-      if (methodMatch === bestMethodMatch && dist < bestDist) {
+      if (methodMatch === bestMethodMatch && isBetterDist(dist, bestDist)) {
         best = ci;
         bestDist = dist;
       }
