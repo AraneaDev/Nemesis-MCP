@@ -72,7 +72,12 @@ describe('nemesis verify-symbol end-to-end', () => {
     expect(guilty?.violations).toHaveLength(1);
     expect(guilty?.violations[0]?.type).toBe('ARITY_MISMATCH');
 
-    // The unrelated `Other.save` double, asked about directly, is clean.
+    // Asked about `Other` directly, its own double still comes back carrying
+    // `Base::save`'s finding. That is a known defect, older than module
+    // support: when a query has only one candidate, the first-methodMatch
+    // branch takes it without consulting the distance sign, so a double below
+    // a finding still wins. Deliberately not asserted here, because this test
+    // exists to pin the fix above rather than to enshrine that residue.
     const other = runCli(['verify-symbol', 'Other', '--strictness=all', '--json'], root);
     const otherReport = JSON.parse(other.stdout) as {
       doubles: Array<{ line: number; valid: boolean }>;
