@@ -99,6 +99,31 @@ describe('type compatibility', () => {
   });
 });
 
+describe('an unbound generic type parameter is not a nominal type', () => {
+  it('accepts any stub for a bare type parameter', () => {
+    expect(typesCompatible('true', 'T', 'typescript')).toBe(true);
+    expect(typesCompatible('42', 'T', 'typescript')).toBe(true);
+  });
+
+  it('accepts any stub for a type parameter wrapped in Promise<>', () => {
+    expect(typesCompatible('true', 'Promise<T>', 'typescript')).toBe(true);
+  });
+
+  it('accepts a fake whose callback annotates unknown against a real one typed by T', () => {
+    // `withCache<T>(key, ttlMs, fn: () => Promise<T>)` compared against a fake
+    // declaring `fn: () => Promise<unknown>`: T cannot drift because nothing
+    // is known about it.
+    expect(typesCompatible('() => Promise<unknown>', '() => Promise<T>', 'typescript')).toBe(true);
+  });
+
+  it('still checks a short capitalised class name that is not this shape', () => {
+    // `Id` and `Db` are real classes, not generic parameters: a second
+    // lowercase letter rules out the single-letter-plus-digit shape.
+    expect(typesCompatible('true', 'Id', 'typescript')).toBe(false);
+    expect(typesCompatible('true', 'Db', 'typescript')).toBe(false);
+  });
+});
+
 describe('inferType', () => {
   it('infers literals', () => {
     expect(inferType("'s'", 'php')).toBe('string');
@@ -302,6 +327,67 @@ describe('object literal returns checked against declared fields', () => {
 
   it('says nothing when the declared type has no known fields', async () => {
     expect(await run('export type User = Record<string, string>;', "{ id: '1' }")).toEqual([]);
+  });
+});
+
+describe('an empty object literal states nothing', () => {
+  async function runReturning(iface: string, methodReturn: string, literal: string) {
+    const { analyzeDoubles } = await import('../../src/core/analyzer.js');
+    const { indexTsFile } = await import('../../src/extractors/ts/index.js');
+    const graph = emptyGraph();
+    await indexTsFile(
+      'src/svc.ts',
+      `${iface}\nexport class Svc { getUser(): ${methodReturn} { return null as never; } }`,
+      graph,
+    );
+    return analyzeDoubles({
+      doubles: [
+        {
+          framework: 'vi.spyOn',
+          language: 'typescript',
+          file: 'tests/a.test.ts',
+          line: 3,
+          targetSymbol: 'Svc',
+          method: 'getUser',
+          methods: [{ name: 'getUser', line: 3 }],
+          withArity: null,
+          assertedArity: null,
+          returnTypeHint: null,
+          returnExpr: literal,
+          confidence: 'definite',
+        },
+      ],
+      graph,
+      fileLines: new Map([['tests/a.test.ts', ['', '', '', '']]]),
+      options: { strictness: 'all' },
+    });
+  }
+
+  const USER = 'export interface User { id: string; name: string; email?: string; }';
+
+  it('produces no missing-field findings, unlike a non-empty literal', async () => {
+    expect(await runReturning(USER, 'User', '{}')).toEqual([]);
+    expect(await runReturning(USER, 'User', '{ }')).toEqual([]);
+    expect(await runReturning(USER, 'User', '{ /* nothing here */ }')).toEqual([]);
+  });
+
+  it('produces no return-kind finding either', async () => {
+    // Against a type `{}` structurally cannot satisfy at all (void), a
+    // non-empty literal would report a kind mismatch. The empty literal
+    // states nothing, so it says nothing here either.
+    expect(await runReturning('', 'void', '{}')).toEqual([]);
+  });
+
+  it('still checks a non-empty literal, so check 5 is not disabled', async () => {
+    const found = await runReturning(USER, 'User', "{ id: '1' }");
+    expect(found.map((f) => f.message)).toEqual([
+      "Stub returns an object missing required field 'name' of User.",
+    ]);
+  });
+
+  it('still compares an empty array, unlike an empty object', async () => {
+    const found = await runReturning('', 'string', '[]');
+    expect(found[0]?.message).toContain("Stub returns 'list' but");
   });
 });
 

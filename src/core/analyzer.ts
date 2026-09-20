@@ -494,7 +494,7 @@ function classify(
     }
 
     // --- RETURN_DRIFT -------------------------------------------------------
-    if (d.returnTypeHint || d.returnExpr !== null) {
+    if ((d.returnTypeHint || d.returnExpr !== null) && !isEmptyObjectLiteral(d.returnExpr)) {
       const declared = real.returnType;
       const stubType = d.returnTypeHint ?? inferType(d.returnExpr ?? '', lang);
 
@@ -772,6 +772,18 @@ function alternatives(raw: string, depth = 0): string[] {
 }
 
 const WILD = /^(mixed|any|unknown|self|static|this|json|jsonvalue|serializable)$/;
+// An unbound generic type parameter: a bare single uppercase letter,
+// optionally followed by one digit (`T`, `U`, `K`, `V`, `R`, `T1`). Nothing
+// can be known about it, so it belongs with the wildcard kinds above rather
+// than being compared as a nominal type. A short capitalised identifier that
+// is not exactly this shape (`Id`, `Db`) is a real class name and must not
+// match here.
+const GENERIC_PARAM = /^[A-Z]\d?$/;
+// The same shape, wherever it appears as a type argument rather than as the
+// whole type: `Promise<T>`, `() => Promise<T>`, `Record<K, V>`. Those never
+// reach `GENERIC_PARAM` above because the surrounding text keeps them from
+// being the entire canonicalised string.
+const EMBEDDED_GENERIC_PARAM = /[<([,]\s*[A-Z]\d?\s*[>)\],]/;
 const STRING = /^(string|str|&str|String|text|char)$/;
 // `byte` (singular) is the Java/C# integer type and stays in INT below;
 // `bytes`/`bytearray`/`memoryview` are Python's binary-data types and must
@@ -794,6 +806,11 @@ function canon(raw: string): Canon {
     .replace(/^readonly\s+/, '')
     .replace(/^\\/, '');
   if (!t) return { kind: 'wild' };
+
+  // An unbound generic type parameter names nothing this tool can check,
+  // whether it is the whole type (`T`) or a type argument inside one
+  // (`Promise<T>`, `() => Promise<T>`).
+  if (GENERIC_PARAM.test(t) || EMBEDDED_GENERIC_PARAM.test(t)) return { kind: 'wild' };
 
   // Strip trailing `[]` / `[][]` — an array of anything is a list.
   if (/\[\s*]$/.test(t)) return { kind: 'list' };
@@ -963,6 +980,24 @@ export function groupByDir(findings: Finding[]): Map<string, Finding[]> {
 }
 
 export { languageForFile };
+
+/**
+ * `{}`, `{ }`, or a literal holding only comments: the universal "I do not
+ * care what this returns" in a mock factory, not a claim about shape. A
+ * non-empty object literal, even `{ id: '1' }`, still states one and keeps
+ * being checked; only the truly empty literal states nothing, the same way a
+ * bare `vi.fn()` with no implementation produces no double at all.
+ */
+function isEmptyObjectLiteral(expr: string | null): boolean {
+  if (!expr) return false;
+  const t = expr.trim();
+  if (!t.startsWith('{') || !t.endsWith('}')) return false;
+  const inner = t
+    .slice(1, -1)
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/.*$/gm, '');
+  return inner.trim() === '';
+}
 
 /**
  * Top-level keys of an object literal, or null when they cannot be known.
