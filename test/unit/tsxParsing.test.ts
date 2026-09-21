@@ -93,6 +93,7 @@ describe('a file the parser cannot read', () => {
         stage: 'parse',
         line: 2,
         message: 'Parsed with errors; everything outside the error was still read.',
+        degraded: true,
         fatal: false,
       },
     ]);

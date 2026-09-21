@@ -60,6 +60,9 @@ export function exitCodeFor(
   // graph, so the scan still cannot be called clean, but the caller may
   // knowingly accept that gap.
   if (diagnostics.some((diagnostic) => diagnostic.fatal)) return 2;
-  if (diagnostics.length > 0 && !opts.allowPartial) return 2;
+  // A degraded file was read and walked, so it leaves no gap in the symbol
+  // graph and does not make the scan incomplete on its own.
+  const unread = diagnostics.filter((diagnostic) => !diagnostic.degraded);
+  if (unread.length > 0 && !opts.allowPartial) return 2;
   return result.violations.length > 0 ? 1 : 0;
 }

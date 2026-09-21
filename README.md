@@ -94,10 +94,15 @@ node dist/cli/main.js verify-symbol PaymentGateway
 node dist/cli/main.js fixtures
 ```
 
-`audit` exits 0 when clean, 1 on a violation, and 2 when the scan could not complete, so it works as
+`audit` exits 0 when clean, 1 on a violation, and 2 when a file was not read, so it works as
 a pre-merge gate without further wiring. `--strictness=all` includes warnings,
 `--strictness=breaking_only` is the default, and `--allow-partial` accepts an incomplete scan
 knowingly rather than failing on it.
+
+A file the grammar could not fully read is a third case, and it is not exit 2. The parse recovers,
+everything around the unreadable region is still indexed, and the run says how many files that
+happened to. Only a file that was not read at all, because of a read error or a size budget, leaves
+a gap in the symbol graph and makes the scan partial.
 
 The summary says how much of the scan it actually compared:
 

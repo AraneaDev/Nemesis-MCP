@@ -284,7 +284,13 @@ export async function runAudit(opts: RuntimeOptions): Promise<AuditResult> {
         ? { mocks_unread: unread.length, mocks_unread_reasons: tally(unread) }
         : {}),
       ...(graph.skippedLanguages.length ? { skipped_languages: graph.skippedLanguages } : {}),
-      ...(diagnostics.length ? { diagnostics, partial: true } : {}),
+      ...(diagnostics.length ? { diagnostics } : {}),
+      ...(diagnostics.some((d) => d.degraded)
+        ? { degraded_files: diagnostics.filter((d) => d.degraded).length }
+        : {}),
+      // Only a file that was not read leaves a gap in the symbol graph. A file
+      // read with an unreadable region is reported as degraded instead.
+      ...(diagnostics.some((d) => !d.degraded) ? { partial: true } : {}),
     },
     violations: filtered,
   };

@@ -268,6 +268,17 @@ export interface ScanDiagnostic {
    */
   line?: number;
   message: string;
+  /**
+   * The file was read and walked; a region of it was not structured.
+   *
+   * A grammar recovers from what it cannot read by standing an error node in
+   * its place, so everything around it is still indexed. Across 54 checkouts
+   * those regions cost 29 doubles out of 8,736, so treating them as an
+   * incomplete scan was out of proportion: 21 of the 54 could never exit 0,
+   * which teaches people to pass `--allow-partial` and so silences the files
+   * that genuinely were not read.
+   */
+  degraded?: boolean;
   fatal: boolean;
 }
 
@@ -305,6 +316,8 @@ export interface AuditSummary {
   mocks_unread_reasons?: Record<string, number>;
   skipped_languages?: LanguageId[];
   diagnostics?: ScanDiagnostic[];
+  /** Files read with an unreadable region. Reported, but not a partial scan. */
+  degraded_files?: number;
   partial?: boolean;
 }
 
