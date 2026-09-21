@@ -413,6 +413,7 @@ export async function checkFixtures(
             });
           } else if (
             !isEnumTyped(graph, meta.type, owner) &&
+            !namesAnUndecidableType(meta.type) &&
             actual &&
             !typesCompatible(actual, meta.type, languageOf(owner.file) ?? 'typescript')
           ) {
@@ -602,6 +603,27 @@ function objectsIn(value: unknown): Array<Record<string, unknown>> {
   return [];
 }
 
+/**
+ * A declared type that is a bare name, which a JSON scalar cannot be judged
+ * against.
+ *
+ * A union alias is indexed without its members, so `mode: Mode` against
+ * `"baseline"` compared the string to the name `Mode` and called it definite
+ * drift. That is the "two differing named types" case the README treats as a
+ * heuristic, and here the evidence runs out entirely: nothing in the scan says
+ * what the name permits. An object type never reaches this point, because a
+ * nested DTO is checked field by field above.
+ */
+const DECIDABLE_TYPE =
+  /^(string|number|int|integer|float|double|bool|boolean|mixed|any|unknown|object|array|list|dict|null|void|never)$/i;
+
+function namesAnUndecidableType(declared: string | null): boolean {
+  if (!declared) return false;
+  const t = declared.trim().replace(/^\?/, '');
+  if (!/^[A-Za-z_$][\w$]*$/.test(t)) return false;
+  return !DECIDABLE_TYPE.test(t);
+}
+
 function recordsOf(data: unknown, dto: DtoLike): Array<Record<string, unknown>> {
   const short = (dto.name.split('\\').pop() ?? dto.name).toLowerCase();
   const out: Array<Record<string, unknown>> = [];
@@ -637,7 +659,16 @@ function recordsOf(data: unknown, dto: DtoLike): Array<Record<string, unknown>> 
         }
       }
     }
-    if (out.length === 0) {
+    // A wrapper carries the records under some key and has no fields of the
+    // DTO itself. An object that does carry them is the record, and the arrays
+    // inside it are its own members. Falling back to those arrays regardless
+    // compared every item against the whole DTO, so each required field was
+    // reported missing once per item: 5,232 definite findings in one
+    // repository, 504 of them against a single correct file.
+    const carriesOwnFields = Object.keys(data as Record<string, unknown>).some((k) =>
+      dto.fields.has(k),
+    );
+    if (out.length === 0 && !carriesOwnFields) {
       // Fallback: any top-level array of objects is treated as the record list
       // (wrapper key naming may not overlap with the DTO name).
       for (const v of Object.values(data as Record<string, unknown>)) {
