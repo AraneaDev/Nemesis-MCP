@@ -164,3 +164,21 @@ describe('suppression', () => {
     expect(before).toBeGreaterThan(0);
   }, 120_000);
 });
+
+describe('absolute scan paths', () => {
+  it('scans an absolute path the same as its relative spelling', async () => {
+    // Regression: the path was joined onto the scan root rather than resolved
+    // against it, so `nemesis audit /abs/path` looked for `<root>/abs/path`
+    // and died with ENOENT on a directory that is plainly there.
+    const absolute = path.join(root, 'fixtures', 'dogfood-repo');
+    expect(await cli(['audit', absolute, '--strictness=all', '--json'])).toBe(1);
+    expect(json().summary.violations_count).toBe(3);
+  }, 120_000);
+
+  it('refuses an absolute path outside the scan root', async () => {
+    // Silently scanning nothing is the failure mode this project exists to
+    // avoid, so a path the root cannot contain has to say so.
+    expect(await cli(['audit', path.resolve(root, '..'), '--json'])).toBe(2);
+    expect(err.join('\n')).toContain('outside the scan root');
+  }, 120_000);
+});

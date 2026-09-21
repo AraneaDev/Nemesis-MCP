@@ -208,8 +208,11 @@ export async function runAudit(opts: RuntimeOptions): Promise<AuditResult> {
     );
   }
   for (const requested of opts.paths ?? []) {
+    // Outside-the-root is decided before the stat, so its own message survives
+    // rather than being rewritten as "does not exist" by the catch below.
+    const relative = requireInsideRoot(requested, rootDir);
     try {
-      await stat(path.join(rootDir, requested));
+      await stat(path.resolve(rootDir, relative));
     } catch (error) {
       throw new Error(
         `Requested scan path '${requested}' does not exist: ${error instanceof Error ? error.message : String(error)}`,
@@ -236,10 +239,10 @@ export async function runAudit(opts: RuntimeOptions): Promise<AuditResult> {
   };
 
   const testFiles = bounded(
-    restrict(filterByLanguages(discovered.testFiles, opts.languages), opts.paths),
+    restrict(filterByLanguages(discovered.testFiles, opts.languages), opts.paths, rootDir),
   );
   const productionFiles = bounded(
-    restrict(filterByLanguages(discovered.productionFiles, opts.languages), opts.paths),
+    restrict(filterByLanguages(discovered.productionFiles, opts.languages), opts.paths, rootDir),
   );
 
   const graph = emptyGraph();
@@ -321,7 +324,11 @@ export async function verifySymbol(
     diagnostics,
   });
   const productionFiles = filterByLanguages(discovered.productionFiles, opts.languages);
-  const testFiles = restrict(filterByLanguages(discovered.testFiles, opts.languages), opts.paths);
+  const testFiles = restrict(
+    filterByLanguages(discovered.testFiles, opts.languages),
+    opts.paths,
+    rootDir,
+  );
 
   const graph = emptyGraph();
   graph.tsPathAliases = await loadTsPathAliases(rootDir, opts.extraExcludes ?? []);
@@ -527,15 +534,35 @@ export async function verifySymbol(
  * `./`, so `audit .` — the most natural way to ask for everything — matched
  * nothing and reported a clean, empty audit with a zero exit code.
  */
-function normalizeScanPath(p: string): string {
-  const posix = p.split(path.sep).join('/');
+function normalizeScanPath(p: string, rootDir?: string): string {
+  // An absolute path is spelled against the filesystem, not the scan root, so
+  // it has to be made relative before it can be compared with a discovered
+  // file. Joining it onto the root instead produced `<root>/abs/path`, which
+  // exists nowhere and failed the scan with ENOENT.
+  const raw = rootDir && path.isAbsolute(p) ? path.relative(rootDir, p) : p;
+  const posix = raw.split(path.sep).join('/');
   const normalized = path.posix.normalize(posix).replace(/^\.\//, '').replace(/\/+$/, '');
   return normalized === '.' ? '' : normalized;
 }
 
+/**
+ * A requested path resolved against the scan root, rejected if it escapes it.
+ *
+ * A path the root cannot contain matches no discovered file, so scanning it
+ * would report a clean, empty audit: the silent false negative this tool
+ * exists to prevent. Saying so is the only honest answer.
+ */
+function requireInsideRoot(requested: string, rootDir: string): string {
+  const relative = normalizeScanPath(requested, rootDir);
+  if (relative === '..' || relative.startsWith('../')) {
+    throw new Error(`Requested scan path '${requested}' is outside the scan root '${rootDir}'.`);
+  }
+  return relative;
+}
+
 /** The files under at least one requested path, or all of them when none was given. */
-function restrict(files: string[], paths?: string[]): string[] {
-  const prefixes = (paths ?? []).map(normalizeScanPath);
+function restrict(files: string[], paths?: string[], rootDir?: string): string[] {
+  const prefixes = (paths ?? []).map((p) => normalizeScanPath(p, rootDir));
   // An empty prefix is the tree root, which every file is under.
   if (prefixes.length === 0 || prefixes.some((p) => p === '')) return files;
   return files.filter((f) => prefixes.some((p) => f === p || f.startsWith(`${p}/`)));
