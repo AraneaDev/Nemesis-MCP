@@ -144,6 +144,7 @@ export async function parseSource(
       // rest of the file was lost overstated the damage: across one sweep of
       // 54 repositories it cost 29 doubles out of 102 affected files.
       message: 'Parsed with errors; everything outside the error was still read.',
+      degraded: true,
       fatal: false,
     });
   }

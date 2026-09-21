@@ -52,7 +52,7 @@ Options:
 Exit codes:
   0  clean scan, nothing to report
   1  violations found
-  2  operational error, or a partial scan (see --allow-partial)
+  2  operational error, or a partial scan: a file was not read (see --allow-partial)
 `;
 
 export type ParseResult = { ok: true; args: CliArgs } | { ok: false; error: string };
@@ -146,13 +146,28 @@ export function parseArgs(argv: string[]): ParseResult {
 /** One line per distinct reason, so an exit 2 always explains itself. */
 function warnAboutDiagnostics(diagnostics: ScanDiagnostic[]): void {
   const fatal = diagnostics.filter((d) => d.fatal);
-  const skipped = diagnostics.filter((d) => !d.fatal);
+  const degraded = diagnostics.filter((d) => d.degraded && !d.fatal);
+  const skipped = diagnostics.filter((d) => !d.fatal && !d.degraded);
   if (fatal.length > 0) {
     console.error(`nemesis: ${fatal.length} file(s) could not be scanned:`);
     for (const d of fatal.slice(0, 5)) {
       console.error(`  ${d.file}: ${d.message}`);
     }
     if (fatal.length > 5) console.error(`  ... and ${fatal.length - 5} more`);
+  }
+  if (degraded.length > 0) {
+    // Read and walked, with an unreadable region inside. Worth knowing about,
+    // but it leaves no gap in the symbol graph and does not fail the scan.
+    const reasons = new Map<string, number>();
+    for (const d of degraded) {
+      reasons.set(d.message, (reasons.get(d.message) ?? 0) + 1);
+    }
+    console.error(
+      `nemesis: ${degraded.length} file(s) read with an unreadable region. Everything around it was still checked.`,
+    );
+    for (const [message, count] of reasons) {
+      console.error(`  ${count}x ${message}`);
+    }
   }
   if (skipped.length > 0) {
     const reasons = new Map<string, number>();
