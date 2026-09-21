@@ -62,14 +62,22 @@ export async function extractRustDoubles(
         if (next) {
           const name = field(next, 'name')?.text;
           if (name) {
-            const methods = next.namedChildren
+            // The signatures sit inside the trait's declaration list, not
+            // directly under the trait, so filtering the trait's own children
+            // matched nothing and every redeclared trait arrived with an empty
+            // method set. Nothing about the copy could then be compared with
+            // the trait in production, which is the only way the two drift.
+            const body = next.namedChildren.find((child) => child.type === 'declaration_list');
+            const methods = (body ?? next).namedChildren
               .filter(
                 (child) =>
                   child.type === 'function_signature_item' || child.type === 'function_item',
               )
-              .map((child) => field(child, 'name')?.text)
-              .filter((method): method is string => Boolean(method))
-              .map((method) => ({ name: method, line: next.startPosition.row + 1 }));
+              .map((child) => ({
+                name: field(child, 'name')?.text,
+                line: child.startPosition.row + 1,
+              }))
+              .filter((method): method is { name: string; line: number } => Boolean(method.name));
             doubles.push({
               framework: 'mockall #[automock]',
               language: 'rust',

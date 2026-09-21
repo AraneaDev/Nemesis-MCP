@@ -207,3 +207,39 @@ describe('mock! blocks', () => {
     expect(found.every((d) => d.methods.length === 0)).toBe(true);
   });
 });
+
+describe('a trait redeclared inside the test file', () => {
+  // The copy is what mockall generates from, so it can drift from the trait in
+  // production while the test still compiles. The members were never listed,
+  // because the filter looked for signatures among the trait's direct children
+  // rather than inside its declaration list, so every such double carried an
+  // empty method set and nothing about it could be checked.
+  it('lists the members the redeclared trait declares', async () => {
+    const [d] = (
+      await doubles(`
+      use mockall::automock;
+      #[automock]
+      trait Clock {
+          fn now(&self) -> u64;
+          fn gone(&self) -> u32;
+      }
+    `)
+    ).filter((x) => x.framework === 'mockall #[automock]');
+    expect(d?.targetSymbol).toBe('Clock');
+    expect(d?.methods.map((m) => m.name)).toEqual(['now', 'gone']);
+    expect(d?.method).toBe('now');
+  });
+
+  it('lists members of a trait that provides a default body', async () => {
+    const [d] = (
+      await doubles(`
+      #[automock]
+      trait Clock {
+          fn now(&self) -> u64;
+          fn zone(&self) -> String { String::new() }
+      }
+    `)
+    ).filter((x) => x.framework === 'mockall #[automock]');
+    expect(d?.methods.map((m) => m.name)).toEqual(['now', 'zone']);
+  });
+});
