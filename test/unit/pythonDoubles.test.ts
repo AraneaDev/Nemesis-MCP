@@ -652,3 +652,39 @@ describe('python brace literals', () => {
     expect(await argCheck('def f(known: dict[str, int]) -> int:', `{"a": 1}`)).toEqual([]);
   });
 });
+
+describe('review follow-ups', () => {
+  it('overwrites an inline return_value when the handle pins another', async () => {
+    const found = (
+      await configured(
+        `from unittest.mock import patch\ndef t():\n    with patch('svc.mod.f', return_value=1) as m:\n        m.return_value = 2`,
+      )
+    ).filter((d) => d.method === 'f');
+    expect(found).toHaveLength(1);
+    expect(found[0]?.returnExpr).toBe('2');
+  });
+
+  it('does not give a parameter to a decorator that supplies new=', async () => {
+    const found = await configured(
+      `from unittest.mock import patch\n@patch.object(Feed, 'count')\n@patch('svc.mod.helper', new=fake)\ndef test_it(mock_count):\n    mock_count.return_value = 'wrong'`,
+    );
+    expect(found.find((d) => d.returnExpr === "'wrong'")?.method).toBe('count');
+  });
+
+  it('does not give a parameter to patch.object with a replacement argument', async () => {
+    const found = await configured(
+      `from unittest.mock import patch\n@patch.object(Feed, 'count')\n@patch.object(Feed, 'other', fake)\ndef test_it(mock_count):\n    mock_count.return_value = 'wrong'`,
+    );
+    expect(found.find((d) => d.returnExpr === "'wrong'")?.method).toBe('count');
+  });
+
+  it('binds patch.multiple members by keyword name', async () => {
+    const found = await configured(
+      `from unittest.mock import patch, DEFAULT\n@patch.object(Feed, 'count')\n@patch.multiple('svc.mod.Feed', load=DEFAULT)\ndef test_it(mock_count, load):\n    mock_count.return_value = 'a'\n    load.return_value = 'b'`,
+    );
+    expect(found.find((d) => d.returnExpr === "'a'")?.method).toBe('count');
+    const b = found.find((d) => d.returnExpr === "'b'");
+    expect(b?.targetSymbol).toBe('svc.mod.Feed');
+    expect(b?.method).toBe('load');
+  });
+});

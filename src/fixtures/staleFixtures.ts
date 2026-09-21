@@ -15,7 +15,7 @@ import { indexPythonFile } from '../extractors/python/index.js';
 import { indexRustFile } from '../extractors/rust/index.js';
 import { similarity } from '../core/symbolGraph.js';
 import { passesStrictness } from '../core/policy.js';
-import { isUntypedSide, typesCompatible } from '../core/analyzer.js';
+import { declaresOnlyNamedTypes, isUntypedSide, typesCompatible } from '../core/analyzer.js';
 
 const FIXTURE_EXTS = new Set(['.json', '.yaml', '.yml']);
 
@@ -413,7 +413,11 @@ export async function checkFixtures(
             });
           } else if (
             !isEnumTyped(graph, meta.type, owner) &&
-            !namesAnUndecidableType(meta.type) &&
+            // A union alias is indexed without its members, so `mode: Mode`
+            // against "baseline" compared the string to the name and called
+            // it definite drift. Nothing in the scan says what a bare name
+            // permits, so a scalar is not judged against one.
+            !declaresOnlyNamedTypes(meta.type ?? '') &&
             actual &&
             !typesCompatible(actual, meta.type, languageOf(owner.file) ?? 'typescript')
           ) {
@@ -601,27 +605,6 @@ function objectsIn(value: unknown): Array<Record<string, unknown>> {
   }
   if (value && typeof value === 'object') return [value as Record<string, unknown>];
   return [];
-}
-
-/**
- * A declared type that is a bare name, which a JSON scalar cannot be judged
- * against.
- *
- * A union alias is indexed without its members, so `mode: Mode` against
- * `"baseline"` compared the string to the name `Mode` and called it definite
- * drift. That is the "two differing named types" case the README treats as a
- * heuristic, and here the evidence runs out entirely: nothing in the scan says
- * what the name permits. An object type never reaches this point, because a
- * nested DTO is checked field by field above.
- */
-const DECIDABLE_TYPE =
-  /^(string|number|int|integer|float|double|bool|boolean|mixed|any|unknown|object|array|list|dict|null|void|never)$/i;
-
-function namesAnUndecidableType(declared: string | null): boolean {
-  if (!declared) return false;
-  const t = declared.trim().replace(/^\?/, '');
-  if (!/^[A-Za-z_$][\w$]*$/.test(t)) return false;
-  return !DECIDABLE_TYPE.test(t);
 }
 
 function recordsOf(data: unknown, dto: DtoLike): Array<Record<string, unknown>> {

@@ -32,8 +32,17 @@ function headerMap(root: SyntaxNode): PhpHeader {
     } else if (node.type === 'namespace_use_declaration') {
       for (const c of node.namedChildren) {
         if (c.type === 'namespace_use_clause') {
-          const name = field(c, 'name')?.text ?? '';
+          // A qualified import, `use Vendor\\Pkg;`, parses as a qualified_name
+          // child with no `name` field. Reading only the field dropped every
+          // such import, which is almost all of them, and left the short-name
+          // fallback in the graph quietly covering for it.
           const alias = field(c, 'alias')?.text;
+          const name =
+            field(c, 'name')?.text ??
+            c.namedChildren.find(
+              (x) => (x.type === 'qualified_name' || x.type === 'name') && x.text !== alias,
+            )?.text ??
+            '';
           if (name) {
             const short = alias ?? name.split('\\').pop() ?? name;
             uses.set(short, name);
@@ -45,11 +54,26 @@ function headerMap(root: SyntaxNode): PhpHeader {
   return { namespace, uses };
 }
 
-/** Qualify a class reference using the file's use-import map. */
+/**
+ * Qualify a class reference the way PHP resolves it.
+ *
+ * Only a leading separator makes a name absolute. `Support\\Retryable` inside
+ * `namespace App` means `App\\Support\\Retryable`, unless `Support` is an
+ * imported alias, in which case the alias replaces that first segment. It used
+ * to be kept as though absolute, so a trait or parent named that way was looked
+ * up under the wrong name and only a unique short-name fallback rescued it.
+ */
 function qualifyName(raw: string, header: PhpHeader): string {
-  const t = raw.replace(/^\\+/, '');
-  if (t.includes('\\')) return t;
-  return header.uses.get(t) ?? (header.namespace ? `${header.namespace}\\${t}` : t);
+  const name = raw.trim();
+  const within = (rest: string): string =>
+    header.namespace ? `${header.namespace}\\${rest}` : rest;
+  if (name.startsWith('\\')) return name.replace(/^\\+/, '');
+  // `namespace\\Foo` is relative to the current namespace and ignores aliases.
+  if (/^namespace\\/i.test(name)) return within(name.slice('namespace\\'.length));
+  const [first = name, ...rest] = name.split('\\');
+  const alias = header.uses.get(first);
+  if (alias) return [alias, ...rest].join('\\');
+  return within(name);
 }
 
 function paramsOf(node: SyntaxNode): ParamSymbol[] {

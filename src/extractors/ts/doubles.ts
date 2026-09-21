@@ -336,9 +336,14 @@ function stubShapeOf(
     if (!call) break;
     const args = call.argsNode?.namedChildren ?? [];
     if (call.property === 'fn' && apiRoot(call)) {
-      impl = args[0];
+      // `vi.fn().mockImplementation(impl)` carries the implementation further
+      // out in the chain; an argument-less `vi.fn()` must not erase it.
+      impl = impl ?? args[0];
       foundFn = true;
       break;
+    }
+    if (IMPLEMENTATIONS.test(call.property)) {
+      impl = impl ?? args[0];
     }
     if (RETURN_SETTERS.test(call.property)) {
       if (call.property.startsWith('mockRejectedValue')) resolvedReturn = true;
@@ -669,6 +674,7 @@ export async function extractTsDoubles(
         ...(stub.fakeArity !== null ? { fakeArity: stub.fakeArity } : {}),
         ...(stub.fakeParamTypes ? { fakeParamTypes: stub.fakeParamTypes } : {}),
         ...(stub.resolvedReturn ? { resolvedReturn: true } : {}),
+        ...(stub.returnAsserted ? { returnAsserted: true } : {}),
         returnTypeHint: stub.returnTypeHint,
         returnExpr: stub.returnExpr,
         // A second view of the key the module-shape double above already
@@ -725,7 +731,8 @@ function unwrapWrappers(node: SyntaxNode | null): SyntaxNode | null {
       current.type === 'as_expression' ||
       current.type === 'assertion_expression' ||
       current.type === 'await_expression' ||
-      current.type === 'non_null_expression'
+      current.type === 'non_null_expression' ||
+      current.type === 'satisfies_expression'
     ) {
       current = current.namedChildren[0] ?? null;
       continue;

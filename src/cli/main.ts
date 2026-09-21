@@ -261,7 +261,9 @@ async function execute(args: CliArgs, rootDir: string): Promise<number> {
     const diagnostics = report.diagnostics ?? [];
     if (diagnostics.length > 0) warnAboutDiagnostics(diagnostics);
     if (diagnostics.some((d) => d.fatal)) return 2;
-    if (diagnostics.length > 0 && !args.allowPartial) return 2;
+    // A degraded file was read and walked, so it is not a gap, exactly as in
+    // exitCodeFor. Only a file that was not read makes this partial.
+    if (diagnostics.some((d) => !d.degraded) && !args.allowPartial) return 2;
     // A double that no longer matches its target is the whole point of the
     // command; reporting it and exiting 0 made it useless as a CI gate.
     return report.doubles.some((d) => !d.valid) ? 1 : 0;
