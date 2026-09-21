@@ -138,19 +138,56 @@ export async function extractPythonDoubles(
       const range: [number, number] | undefined = fn
         ? [fn.startPosition.row + 1, fn.endPosition.row + 1]
         : undefined;
-      const patchers = node.namedChildren
+      const scoped = range ? { scope: range } : {};
+      const calls = node.namedChildren
         .filter((c) => c.type === 'decorator')
         .map((c) => c.namedChildren[0])
-        .map((c) => (c ? patcherTarget(c) : null))
         .reverse();
       let slot = 0;
-      for (const hit of patchers) {
+      for (const call of calls) {
+        if (call?.type !== 'call') continue;
+        const fnText = field(call, 'function')?.text ?? '';
+        const positional = (field(call, 'arguments')?.namedChildren ?? []).filter(
+          (a) => a.type !== 'comment' && a.type !== 'keyword_argument',
+        );
+        // `patch.multiple` injects no positional mock. Each member given as
+        // DEFAULT arrives as a keyword argument named after the member, so it
+        // binds by name and consumes no slot.
+        if (/^(\w+\.)?patch[._]multiple$/.test(fnText)) {
+          const owner = positional[0];
+          const target =
+            owner?.type === 'string' && !isInterpolated(owner)
+              ? unquote(owner.text)
+              : owner && (owner.type === 'identifier' || owner.type === 'attribute')
+                ? owner.text
+                : null;
+          if (!target) continue;
+          for (const kw of field(call, 'arguments')?.namedChildren ?? []) {
+            if (kw.type !== 'keyword_argument') continue;
+            const member = field(kw, 'name')?.text;
+            const value = field(kw, 'value')?.text ?? '';
+            if (!member || !/(^|\.)DEFAULT$/.test(value)) continue;
+            varMap.set(member, {
+              target,
+              method: member,
+              callLine: call.startPosition.row + 1,
+              ...scoped,
+            });
+            specMap.delete(member);
+          }
+          continue;
+        }
+        const hit = patcherTarget(call);
         // A decorator that is not a patcher injects nothing, so it consumes no
         // parameter and must not shift the ones that follow.
         if (!hit) continue;
+        // A patcher handed its replacement, positionally or as `new=`, injects
+        // nothing either: the test already holds the object it supplied.
+        const replacementAt = /^(\w+\.)?patch[._]object$/.test(fnText) ? 2 : 1;
+        if (positional.length > replacementAt || keywordValue(call, 'new')) continue;
         const name = names[slot++];
         if (name) {
-          varMap.set(name, { ...hit, ...(range ? { scope: range } : {}) });
+          varMap.set(name, { ...hit, ...scoped });
           specMap.delete(name);
         }
       }
@@ -197,10 +234,7 @@ export async function extractPythonDoubles(
             'callLine' in hit && hit.callLine !== undefined
               ? doubles.find(
                   (d) =>
-                    d.line === hit.callLine &&
-                    d.targetSymbol === hit.target &&
-                    d.method === method &&
-                    d.returnExpr === null,
+                    d.line === hit.callLine && d.targetSymbol === hit.target && d.method === method,
                 )
               : undefined;
           if (existing) {

@@ -102,3 +102,30 @@ export interface CaptureMeta {
     expect(messages.some((m) => m.includes("missing required field 'app'"))).toBe(true);
   });
 });
+
+describe('review follow-ups', () => {
+  it('stays silent on a nullable named type', async () => {
+    const DTO = `export type Mode = 'q' | 'baseline';\nexport interface CaptureMeta {\n  app: string;\n  mode: Mode | null;\n}\n`;
+    expect(await project(DTO, 'captureMeta.fixture.json', { app: 'x', mode: 'baseline' })).toEqual(
+      [],
+    );
+  });
+
+  it('still judges a Python str field', async () => {
+    root = await mkdtemp(path.join(os.tmpdir(), 'nemesis-records-'));
+    await mkdir(path.join(root, 'src'), { recursive: true });
+    await mkdir(path.join(root, 'fixtures'), { recursive: true });
+    await writeFile(
+      path.join(root, 'src', 'dto.py'),
+      'from dataclasses import dataclass\n\n@dataclass\nclass UserRecord:\n    name: str\n    age: int\n',
+      'utf8',
+    );
+    await writeFile(
+      path.join(root, 'fixtures', 'userRecord.fixture.json'),
+      JSON.stringify({ name: 7, age: 3 }),
+      'utf8',
+    );
+    const messages = (await checkFixtures(root)).violations.map((v) => v.message);
+    expect(messages.some((m) => m.includes("'name'"))).toBe(true);
+  });
+});

@@ -1372,3 +1372,83 @@ describe('a replacement that builds its own promise', () => {
     expect(found.map((f) => f.type)).toContain('RETURN_DRIFT');
   });
 });
+
+describe('PHP names qualified relative to the namespace', () => {
+  async function run(source: string, method: string) {
+    const { analyzeDoubles } = await import('../../src/core/analyzer.js');
+    const { indexPhpFile } = await import('../../src/extractors/php/index.js');
+    const graph = emptyGraph();
+    await indexPhpFile(
+      'src/Support/Retryable.php',
+      '<?php namespace App\\Support; trait Retryable { public function retry(int $t): bool {} }',
+      graph,
+    );
+    await indexPhpFile('src/Job.php', source, graph);
+    return analyzeDoubles({
+      doubles: [
+        {
+          framework: 'Mockery',
+          language: 'php',
+          file: 'tests/JTest.php',
+          line: 5,
+          targetSymbol: 'App\\Job',
+          method,
+          methods: [{ name: method, line: 6 }],
+          withArity: null,
+          assertedArity: null,
+          returnTypeHint: null,
+          returnExpr: null,
+          confidence: 'definite',
+        },
+      ],
+      graph,
+      fileLines: new Map([['tests/JTest.php', ['', '', '', '', '', '', '']]]),
+      options: { strictness: 'all' },
+    });
+  }
+
+  // `Support\\Retryable` inside `namespace App` means `App\\Support\\Retryable`.
+  // It was kept as though absolute, so the trait was looked up under the wrong
+  // name and only a unique short-name fallback rescued it.
+  it('resolves a qualified trait name against the current namespace', async () => {
+    const { indexPhpFile } = await import('../../src/extractors/php/index.js');
+    const graph = emptyGraph();
+    await indexPhpFile(
+      'src/Job.php',
+      '<?php namespace App; class Job { use Support\\Retryable; }',
+      graph,
+    );
+    const job = [...graph.types.values()].flat().find((t) => t.name === 'App\\Job');
+    expect(job?.uses).toEqual(['App\\Support\\Retryable']);
+  });
+
+  it('keeps a fully qualified name absolute', async () => {
+    const { indexPhpFile } = await import('../../src/extractors/php/index.js');
+    const graph = emptyGraph();
+    await indexPhpFile(
+      'src/Job.php',
+      '<?php namespace App; class Job { use \\Lib\\Retryable; }',
+      graph,
+    );
+    const job = [...graph.types.values()].flat().find((t) => t.name === 'App\\Job');
+    expect(job?.uses).toEqual(['Lib\\Retryable']);
+  });
+
+  it('applies an import alias to the first segment', async () => {
+    const { indexPhpFile } = await import('../../src/extractors/php/index.js');
+    const graph = emptyGraph();
+    await indexPhpFile(
+      'src/Job.php',
+      '<?php namespace App; use Vendor\\Pkg as P; class Job { use P\\Retryable; }',
+      graph,
+    );
+    const job = [...graph.types.values()].flat().find((t) => t.name === 'App\\Job');
+    expect(job?.uses).toEqual(['Vendor\\Pkg\\Retryable']);
+  });
+
+  it('still finds the trait method through it', async () => {
+    expect(
+      await run('<?php namespace App; class Job { use Support\\Retryable; }', 'retry'),
+    ).toEqual([]);
+  });
+});

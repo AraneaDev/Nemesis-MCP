@@ -1219,6 +1219,23 @@ export function bothNominal(stub: string, declared: string): boolean {
 }
 
 /** Structural compatibility check between stub type and declared type. */
+/**
+ * Whether every non-null alternative of a declared type is a bare name, so a
+ * JSON scalar cannot be judged against it without resolving that name.
+ *
+ * Classified by `canon`, the same lattice the rest of the analysis uses, so
+ * `str`, `int` and `?int` are primitives in every language rather than in
+ * whichever of them a local allowlist remembered, and `Mode | null` is a name
+ * once its null alternative is set aside.
+ */
+export function declaresOnlyNamedTypes(declared: string): boolean {
+  const parts = alternatives(declared).filter((part) => {
+    const kind = canon(part).kind;
+    return kind !== 'null' && kind !== 'undefined' && kind !== 'void';
+  });
+  return parts.length > 0 && parts.every((part) => canon(part).kind === 'nominal');
+}
+
 export function typesCompatible(stub: string, declared: string, lang: string): boolean {
   const s = stub.trim();
   const d = declared.trim();

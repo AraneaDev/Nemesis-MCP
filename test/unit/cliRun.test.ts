@@ -182,3 +182,26 @@ describe('absolute scan paths', () => {
     expect(err.join('\n')).toContain('outside the scan root');
   }, 120_000);
 });
+
+describe('verify-symbol with a degraded file', () => {
+  it('does not call a scan with an unreadable region partial', async () => {
+    const { mkdtemp, mkdir, writeFile, rm } = await import('node:fs/promises');
+    const os = await import('node:os');
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'nemesis-verify-'));
+    try {
+      await mkdir(path.join(dir, 'src'), { recursive: true });
+      await mkdir(path.join(dir, 'tests'), { recursive: true });
+      await writeFile(
+        path.join(dir, 'src', 'svc.ts'),
+        "export type * from './e.js';\nexport class Svc {\n  load(): boolean { return true; }\n}\n",
+      );
+      await writeFile(
+        path.join(dir, 'tests', 'svc.test.ts'),
+        "import { vi } from 'vitest';\nimport { Svc } from '../src/svc.js';\nconst s = new Svc();\nvi.spyOn(s, 'load').mockReturnValue(true);\n",
+      );
+      expect(await cli(['verify-symbol', 'Svc'], dir)).toBe(0);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 120_000);
+});

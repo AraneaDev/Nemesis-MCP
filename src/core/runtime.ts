@@ -552,18 +552,34 @@ function normalizeScanPath(p: string, rootDir?: string): string {
 }
 
 /**
+ * Whether a path, given relative to the scan root, lands outside it.
+ *
+ * Checking for a leading `..` was not enough: across Windows volumes
+ * `path.relative` returns the absolute target itself, so `D:\\other` passed a
+ * scan rooted on `C:\\`. The path module is a parameter so both platforms'
+ * rules can be tested from either.
+ */
+export function escapesRoot(relative: string, p: path.PlatformPath = path): boolean {
+  if (p.isAbsolute(relative)) return true;
+  return relative === '..' || relative.startsWith(`..${p.sep}`) || relative.startsWith('../');
+}
+
+/**
  * A requested path resolved against the scan root, rejected if it escapes it.
  *
  * A path the root cannot contain matches no discovered file, so scanning it
  * would report a clean, empty audit: the silent false negative this tool
  * exists to prevent. Saying so is the only honest answer.
+ *
+ * This is a check on what was asked for, not a sandbox. Discovery follows a
+ * symlinked directory wherever it points, deliberately, because pnpm
+ * workspaces and many monorepos link their source trees in.
  */
 function requireInsideRoot(requested: string, rootDir: string): string {
-  const relative = normalizeScanPath(requested, rootDir);
-  if (relative === '..' || relative.startsWith('../')) {
+  if (escapesRoot(path.relative(rootDir, path.resolve(rootDir, requested)))) {
     throw new Error(`Requested scan path '${requested}' is outside the scan root '${rootDir}'.`);
   }
-  return relative;
+  return normalizeScanPath(requested, rootDir);
 }
 
 /** The files under at least one requested path, or all of them when none was given. */

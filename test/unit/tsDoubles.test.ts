@@ -327,3 +327,28 @@ describe('marking a return written behind a type assertion', () => {
     expect(d?.returnAsserted).toBeUndefined();
   });
 });
+
+describe('review follow-ups', () => {
+  it('keeps returnAsserted on a factory double', async () => {
+    const [d] = (
+      await doubles(
+        `import { vi } from 'vitest';\nvi.mock('../src/api', () => ({ load: vi.fn().mockResolvedValue({ id: '1' } as any) }));`,
+      )
+    ).filter((x) => x.method === 'load');
+    expect(d?.returnAsserted).toBe(true);
+  });
+
+  it('reads mockImplementation in an assigned chain', async () => {
+    const [d] = await doubles(
+      `${PRELUDE}s.load = vi.fn().mockImplementation((a: string, b: number) => 1);`,
+    );
+    expect(d?.fakeArity).toBe(2);
+    expect(d?.returnExpr).toBe('1');
+  });
+
+  it('unwraps a satisfies receiver', async () => {
+    const [d] = await doubles(`${PRELUDE}(s satisfies Svc).load.mockReturnValue(1);`);
+    expect(d?.method).toBe('load');
+    expect(d?.targetSymbol).toBe('Svc');
+  });
+});
