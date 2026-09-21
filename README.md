@@ -58,8 +58,11 @@ build over. `warning` is a heuristic, and the difference is deliberate: two diff
 are only a warning, because the class relating them usually lives in `vendor/` or `node_modules/`,
 which are never walked. A Python method with one leading underscore is a naming convention rather
 than access control, so stubbing it warns; only a name-mangled `__member` is a definite breach. A
-stubbed method whose name is built at runtime, such as `shouldReceive($method)` inside a loop, names
-nothing checkable and is skipped entirely.
+return value written behind a type assertion is read through the cast, because that is where drift
+hides, but a field missing from it only warns: `as unknown as T` is also how a deliberate partial
+stub is written, and syntax cannot tell the two apart. A stubbed method whose name is built at
+runtime, such as `shouldReceive($method)` inside a loop, names nothing checkable and is skipped
+entirely.
 
 **Where the evidence runs out, the answer is silence.** A warning that is wrong most of the time
 teaches people to ignore the tool, which costs more than the finding was worth.
