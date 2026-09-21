@@ -636,6 +636,7 @@ export async function indexTsFile(
     source,
     grammar,
     report(relFile, language, diagnostics),
+    grammar === 'javascript' ? 'tsx' : undefined,
   );
   const { root } = parsed;
 
