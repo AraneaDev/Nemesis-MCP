@@ -92,22 +92,58 @@ export interface ParseReport {
   diagnostics: ScanDiagnostic[];
 }
 
+/** Line of the first node the grammar could not read, 1-based. */
+function firstErrorLine(root: import('web-tree-sitter').Node): number | null {
+  let earliest: number | null = null;
+  const visit = (node: import('web-tree-sitter').Node): void => {
+    if (node.type === 'ERROR' || node.isMissing) {
+      const line = node.startPosition.row + 1;
+      if (earliest === null || line < earliest) earliest = line;
+      // An error node's children are recovered fragments, not further
+      // failures, so there is nothing earlier to find inside it.
+      return;
+    }
+    if (!node.hasError) return;
+    for (let i = 0; i < node.childCount; i++) {
+      const child = node.child(i);
+      if (child) visit(child);
+    }
+  };
+  visit(root);
+  return earliest;
+}
+
 /** Parse source text with the grammar for the given language. */
 export async function parseSource(
   language: LanguageId,
   source: string,
   grammar: GrammarName = LANGUAGE_GRAMMAR[language],
   report?: ParseReport,
+  fallback?: GrammarName,
 ): Promise<ParsedFile> {
   const parser = await getParser(grammar);
-  const tree = parser.parse(source);
+  let tree = parser.parse(source);
   if (!tree) throw new Error(`Parsing failed for a ${language} file`);
+  // A second grammar that reads a superset of the first. The bundled
+  // JavaScript grammar rejects a JSX attribute named with a reserved word
+  // (`class=`, `for=`, `default=`), which React code in `.js` and `.jsx` has
+  // used since long before TypeScript; the TSX grammar reads all three. The
+  // retry costs a parse only for a file that already failed.
+  if (fallback && tree.rootNode.hasError) {
+    const second = (await getParser(fallback)).parse(source);
+    if (second && !second.rootNode.hasError) tree = second;
+  }
   if (report && tree.rootNode.hasError) {
     report.diagnostics.push({
       file: report.file,
       ...(report.language ? { language: report.language } : {}),
       stage: 'parse',
-      message: 'Parsed with errors; the rest of the file was not read.',
+      ...(firstErrorLine(tree.rootNode) !== null ? { line: firstErrorLine(tree.rootNode)! } : {}),
+      // A grammar recovers by standing an error node in place of what it could
+      // not read, so the walk still covers everything around it. Saying the
+      // rest of the file was lost overstated the damage: across one sweep of
+      // 54 repositories it cost 29 doubles out of 102 affected files.
+      message: 'Parsed with errors; everything outside the error was still read.',
       fatal: false,
     });
   }

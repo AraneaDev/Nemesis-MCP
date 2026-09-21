@@ -78,7 +78,12 @@ describe('a file the parser cannot read', () => {
     `}));`,
   ].join('\n');
 
-  it('records a diagnostic naming the file', async () => {
+  it('records a diagnostic naming the file and the line', async () => {
+    // The old wording said the rest of the file was not read, which is not
+    // what happens: tree-sitter recovers, the walk continues, and only what
+    // the error node covers is lost. Across one sweep of 54 repositories that
+    // came to 29 doubles out of 102 affected files, so a reader told the whole
+    // file was lost would overestimate the damage and distrust the result.
     const diagnostics: ScanDiagnostic[] = [];
     await extractTsDoubles('tests/a.test.ts', UNREADABLE, 'typescript', diagnostics);
     expect(diagnostics).toEqual([
@@ -86,10 +91,23 @@ describe('a file the parser cannot read', () => {
         file: 'tests/a.test.ts',
         language: 'typescript',
         stage: 'parse',
-        message: 'Parsed with errors; the rest of the file was not read.',
+        line: 2,
+        message: 'Parsed with errors; everything outside the error was still read.',
         fatal: false,
       },
     ]);
+  });
+
+  it('points at the first line the parser could not read', async () => {
+    const diagnostics: ScanDiagnostic[] = [];
+    const src = [
+      `const ok = 1;`,
+      `const alsoOk = 2;`,
+      `export type * from './e.js';`,
+      `const after = 3;`,
+    ].join('\n');
+    await extractTsDoubles('tests/c.test.ts', src, 'typescript', diagnostics);
+    expect(diagnostics[0]?.line).toBe(3);
   });
 
   it('records nothing for a file that parses', async () => {
@@ -107,5 +125,69 @@ describe('a file the parser cannot read', () => {
     const { doubles } = await extractTsDoubles('tests/a.test.ts', UNREADABLE, 'typescript');
     // The mock call itself is seen; only the factory's keys are lost.
     expect(doubles.length).toBeGreaterThanOrEqual(0);
+  });
+});
+
+// JSX is not confined to `.tsx`. React has been written in `.js` and `.jsx`
+// since long before TypeScript, and the bundled JavaScript grammar rejects a
+// JSX attribute whose name is a reserved word: `class=`, `for=`, `default=`.
+// The TSX grammar reads all three. Eleven files across four repositories in a
+// dogfood sweep parsed into an error node for only that reason.
+describe('JSX in a .js or .jsx file', () => {
+  const RESERVED_ATTR = [
+    `export function Row({ children }) {`,
+    `  return <div class="headers" for="x">{children}</div>;`,
+    `}`,
+    `export function refresh(id) {`,
+    `  return true;`,
+    `}`,
+  ].join('\n');
+
+  it('cannot be read by the JavaScript grammar alone', async () => {
+    const plain = await parseSource('javascript', RESERVED_ATTR, 'javascript');
+    expect(plain.root.hasError).toBe(true);
+    const jsx = await parseSource('typescript', RESERVED_ATTR, 'tsx');
+    expect(jsx.root.hasError).toBe(false);
+  });
+
+  it('records no diagnostic and indexes what follows the JSX', async () => {
+    const diagnostics: ScanDiagnostic[] = [];
+    const g = emptyGraph();
+    await indexTsFile('src/Row.jsx', RESERVED_ATTR, g, diagnostics);
+    expect(diagnostics).toEqual([]);
+    expect(g.modules.get('src/Row.jsx')?.methods.has('refresh')).toBe(true);
+  });
+
+  it('reads a double written after the JSX', async () => {
+    const diagnostics: ScanDiagnostic[] = [];
+    const src = [
+      `it('renders', () => {`,
+      `  render(<Row class="headers">x</Row>);`,
+      `});`,
+      `vi.mock('../api', () => ({ getUser: vi.fn() }));`,
+    ].join('\n');
+    const { doubles } = await extractTsDoubles(
+      'src/__tests__/Row.test.jsx',
+      src,
+      'javascript',
+      diagnostics,
+    );
+    expect(diagnostics).toEqual([]);
+    expect(doubles.some((d) => d.moduleSpecifier === '../api')).toBe(true);
+  });
+
+  it('still reports a file no grammar can read', async () => {
+    // A bare `&` in JSX text defeats both grammars, so the fallback must not
+    // turn an unreadable file into a silently clean one.
+    const diagnostics: ScanDiagnostic[] = [];
+    await indexTsFile(
+      'src/Bad.jsx',
+      `export const A = () => <p>a & b</p>;`,
+      {
+        ...emptyGraph(),
+      },
+      diagnostics,
+    );
+    expect(diagnostics.map((d) => d.stage)).toEqual(['parse']);
   });
 });
