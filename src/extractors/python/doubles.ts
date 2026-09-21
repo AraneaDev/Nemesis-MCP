@@ -48,11 +48,114 @@ export async function extractPythonDoubles(
   );
   const { root } = parsed;
 
-  /** variable name → resolved target (from `x = mocker.patch(...)` assignments) */
-  const varMap = new Map<string, { target: string; method: string | null }>();
+  /**
+   * variable name → resolved target (from `x = mocker.patch(...)` assignments,
+   * with-aliases and decorator parameters).
+   *
+   * `scope` is the line range a decorator-injected parameter is valid in. The
+   * walk is one flat, scope-blind pass, so without it `mock_verify` in one test
+   * method carried the patcher bound by another method's decorator and named a
+   * real member of a real module with total confidence.
+   */
+  const varMap = new Map<
+    string,
+    { target: string; method: string | null; callLine?: number; scope?: [number, number] }
+  >();
   const specMap = new Map<string, { target: string }>();
 
+  /**
+   * What a `patch(...)` / `patch.object(...)` call names, or null when it is
+   * not a patcher or its target cannot be read statically.
+   */
+  const patcherTarget = (
+    call: SyntaxNode,
+  ): { target: string; method: string | null; callLine: number } | null => {
+    if (call.type !== 'call') return null;
+    const fnText = field(call, 'function')?.text ?? '';
+    if (!/^(\w+\.)?patch([._](object|multiple))?$/.test(fnText) && fnText !== 'create_autospec') {
+      return null;
+    }
+    const args = field(call, 'arguments');
+    const named = (args?.namedChildren ?? []).filter((a) => a.type !== 'comment');
+    const first = named[0];
+    if (!first) return null;
+    if (first.type === 'string') {
+      // An interpolated target names nothing checkable, and binding it put the
+      // literal prefix into the map as though it were a module.
+      if (isInterpolated(first)) return null;
+      const split = splitDottedTarget(unquote(first.text));
+      return { target: split.type, method: split.method, callLine: call.startPosition.row + 1 };
+    }
+    if (first.type !== 'identifier' && first.type !== 'attribute') return null;
+    // `patch.object(Type, 'method')` names the member in its second argument.
+    const second = named[1];
+    const method =
+      /^(\w+\.)?patch\.object$/.test(fnText) && second?.type === 'string' && !isInterpolated(second)
+        ? unquote(second.text)
+        : null;
+    return { target: first.text, method, callLine: call.startPosition.row + 1 };
+  };
+
   for (const { node } of walk(root)) {
+    // `with patch.object(C, 'm') as handle:` binds the patcher to the alias.
+    if (node.type === 'as_pattern') {
+      const alias = field(node, 'alias')?.text ?? node.namedChildren[1]?.text;
+      const value = node.namedChildren[0];
+      if (alias && value) {
+        const hit = patcherTarget(value);
+        if (hit) {
+          varMap.set(alias, hit);
+          specMap.delete(alias);
+        }
+      }
+    }
+
+    // `@patch.object(...)` injects one parameter per patching decorator, and
+    // unittest.mock fills them bottom-up: the decorator nearest the function
+    // supplies the first parameter.
+    if (node.type === 'decorated_definition') {
+      const fn = node.namedChildren.find((c) => c.type === 'function_definition');
+      const params = fn ? field(fn, 'parameters') : null;
+      const names = (params?.namedChildren ?? [])
+        .filter(
+          (c) =>
+            c.type === 'identifier' ||
+            c.type === 'default_parameter' ||
+            c.type === 'typed_parameter' ||
+            c.type === 'typed_default_parameter',
+        )
+        .map((c) =>
+          c.type === 'identifier'
+            ? c.text
+            : (field(c, 'name')?.text ??
+              c.namedChildren.find((x) => x.type === 'identifier')?.text ??
+              ''),
+        )
+        // unittest.mock injects after the receiver, so a method's first
+        // parameter is not a mock. Counting from slot 0 bound the patcher to
+        // `self` and shifted every real mock one place along.
+        .filter((n, i) => !(i === 0 && /^(self|cls|mcs)$/.test(n)));
+      const range: [number, number] | undefined = fn
+        ? [fn.startPosition.row + 1, fn.endPosition.row + 1]
+        : undefined;
+      const patchers = node.namedChildren
+        .filter((c) => c.type === 'decorator')
+        .map((c) => c.namedChildren[0])
+        .map((c) => (c ? patcherTarget(c) : null))
+        .reverse();
+      let slot = 0;
+      for (const hit of patchers) {
+        // A decorator that is not a patcher injects nothing, so it consumes no
+        // parameter and must not shift the ones that follow.
+        if (!hit) continue;
+        const name = names[slot++];
+        if (name) {
+          varMap.set(name, { ...hit, ...(range ? { scope: range } : {}) });
+          specMap.delete(name);
+        }
+      }
+    }
+
     if (node.type === 'assignment') {
       const left = field(node, 'left');
       const right = field(node, 'right');
@@ -61,17 +164,50 @@ export async function extractPythonDoubles(
       if (isReturn || isSideEffect) {
         const parts = left!.text.split('.');
         const variable = parts[0];
-        const method = parts[parts.length - 2];
         const fakeArity = isSideEffect ? lambdaArity(right) : null;
+        const tracked = variable ? varMap.get(variable) : undefined;
+        const line = node.startPosition.row + 1;
+        const inScope = !tracked?.scope || (line >= tracked.scope[0] && line <= tracked.scope[1]);
         const hit = variable
-          ? (varMap.get(variable) ??
+          ? ((inScope ? tracked : undefined) ??
             (specMap.has(variable)
               ? { target: specMap.get(variable)!.target, method: null }
               : undefined))
           : undefined;
+        // `handle.return_value` names no member of its own, so the method is
+        // the one the patcher already named. A longer path, as in
+        // `mock.count.return_value`, names the member itself.
+        //
+        // Unless the patcher already consumed a name: `patch('svc.auth.user_repo')`
+        // replaces an object living in that module, so `handle.get_by_username`
+        // configures a member of THAT object, whose type nothing here knows.
+        // `user_repo` and `Client` are the same syntax, so a class cannot be
+        // told from an instance either. Reading the attribute as a member of
+        // the module claimed the module had the method, which was 397 false
+        // GHOST_METHODs in one repository. Where the evidence runs out, silence.
+        const reachesPastTheTarget = parts.length > 2 && Boolean(hit?.method);
+        const method = parts.length === 2 ? (hit?.method ?? undefined) : parts[parts.length - 2];
         // A `side_effect` that is not a literal lambda says nothing about the
         // signature, and its value is not a return value either.
-        if (hit && method && (isReturn || fakeArity !== null)) {
+        if (hit && method && !reachesPastTheTarget && (isReturn || fakeArity !== null)) {
+          // The patch call already produced a double for this member; the
+          // handle only pins its return. Pushing a second one reported every
+          // finding about the stub twice, once per line.
+          const existing =
+            'callLine' in hit && hit.callLine !== undefined
+              ? doubles.find(
+                  (d) =>
+                    d.line === hit.callLine &&
+                    d.targetSymbol === hit.target &&
+                    d.method === method &&
+                    d.returnExpr === null,
+                )
+              : undefined;
+          if (existing) {
+            if (isReturn) existing.returnExpr = right?.text ?? null;
+            if (fakeArity !== null) existing.fakeArity = fakeArity;
+            continue;
+          }
           doubles.push({
             framework: 'unittest.mock',
             language: 'python',
@@ -92,32 +228,30 @@ export async function extractPythonDoubles(
       if (left?.type === 'identifier' && right?.type === 'call') {
         const fn = field(right, 'function');
         const fnText = fn?.text ?? '';
-        if (/^(\w+\.)?patch(_object|_multiple)?$/.test(fnText) || fnText === 'create_autospec') {
-          const args = field(right, 'arguments');
-          const first = (args?.namedChildren ?? []).filter((a) => a.type !== 'comment')[0];
-          let target: string | null = null;
-          let method: string | null = null;
-          if (first) {
-            // A patch assigned to a variable takes this path rather than the
-            // call path below, so it needs the same interpolation guard. Without
-            // it, `m = patch(f"{MODULE}.get_user")` put `f"{MODULE}` into the
-            // variable map and every assertion made through `m` afterwards was
-            // compared against a module by that name.
-            if (first.type === 'string' && !isInterpolated(first)) {
-              const split = splitDottedTarget(unquote(first.text));
-              target = split.type;
-              method = split.method;
-            } else if (first.type === 'identifier' || first.type === 'attribute') {
-              target = first.text;
-            }
-          }
-          if (target) {
-            varMap.set(left.text, { target, method });
+        if (
+          /^(\w+\.)?patch([._](object|multiple))?$/.test(fnText) ||
+          fnText === 'create_autospec'
+        ) {
+          // Read the same way as a with-alias or a decorator, so `m = patch...`
+          // binds the member named by `patch.object(Type, 'method')` too. The
+          // interpolation guard lives in there: without it,
+          // `m = patch(f"{MODULE}.get_user")` put `f"{MODULE}` into the map and
+          // every assertion made through `m` was compared against a module by
+          // that name.
+          const hit = patcherTarget(right);
+          if (hit) {
+            varMap.set(left.text, hit);
+            specMap.delete(left.text);
           }
         } else if (/^(Async)?Magic?Mock$|^(Async)?Mock$/.test(fnText)) {
           const spec = keywordValue(right, 'spec') ?? keywordValue(right, 'spec_set');
           if (spec && (spec.type === 'identifier' || spec.type === 'attribute')) {
+            // The maps are flat and scope-blind, so `m` in one test function
+            // is the same key as `m` in the next. A later binding has to
+            // replace the earlier one, or a stale with-alias keeps winning and
+            // the member configured here stops being checked.
             specMap.set(left.text, { target: spec.text });
+            varMap.delete(left.text);
             doubles.push({
               framework: 'unittest.mock',
               language: 'python',
@@ -323,8 +457,22 @@ export async function extractPythonDoubles(
         name: string,
         method: string | null,
       ): { target: string; method: string | null } | null => {
-        const tracked = varMap.get(name);
-        if (tracked) return { target: tracked.target, method: method ?? tracked.method };
+        const line = node.startPosition.row + 1;
+        const candidate = varMap.get(name);
+        const tracked =
+          candidate &&
+          (!candidate.scope || (line >= candidate.scope[0] && line <= candidate.scope[1]))
+            ? candidate
+            : undefined;
+        if (tracked) {
+          // The patcher already consumed a name, and the assertion reaches
+          // past it: `patch("mod.singleton")` replaces an object living in the
+          // module, so `handle.method` is a member of THAT object and nothing
+          // here knows its type. Reading it as a member of the module claimed
+          // the module had the method.
+          if (method !== null && tracked.method) return null;
+          return { target: tracked.target, method: method ?? tracked.method };
+        }
         const spec = specMap.get(name);
         return spec ? { target: spec.target, method } : null;
       };

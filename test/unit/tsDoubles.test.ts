@@ -224,3 +224,106 @@ describe('a receiver that is a module', () => {
     expect(d?.targetSymbol).toBe('LocalService');
   });
 });
+
+describe('return values written through a type assertion', () => {
+  // `as any` is what gets added when a stale mock stops compiling, so the
+  // assertion is the drift's own fingerprint. Reading the cast as the return
+  // expression hid the literal and switched the structural check off, which
+  // silenced exactly the case this tool exists to catch.
+  it('reads through `as any` to the literal underneath', async () => {
+    const [d] = await doubles(
+      `${PRELUDE}vi.spyOn(s, 'load').mockResolvedValue({ id: '1', nickname: 'x' } as any);`,
+    );
+    expect(d?.returnExpr).toBe("{ id: '1', nickname: 'x' }");
+  });
+
+  it('reads through a named assertion and through `satisfies`', async () => {
+    const [named] = await doubles(`${PRELUDE}vi.spyOn(s, 'load').mockReturnValue(1 as number);`);
+    expect(named?.returnExpr).toBe('1');
+    const [sat] = await doubles(
+      `${PRELUDE}vi.spyOn(s, 'load').mockReturnValue(1 satisfies number);`,
+    );
+    expect(sat?.returnExpr).toBe('1');
+  });
+
+  it('reads through a double assertion', async () => {
+    const [d] = await doubles(
+      `${PRELUDE}vi.spyOn(s, 'load').mockReturnValue({ id: '1' } as unknown as Profile);`,
+    );
+    expect(d?.returnExpr).toBe("{ id: '1' }");
+  });
+});
+
+describe('vi.mocked wrapping the receiver rather than the member', () => {
+  // `vi.mocked(svc.load)` was read, but `vi.mocked(svc).load` produced no
+  // double at all. Both are idiomatic, and the second is what gets written
+  // once a whole class or module is mocked, so the silence was total.
+  it('reads vi.mocked(receiver).member', async () => {
+    const [d] = await doubles(`${PRELUDE}vi.mocked(s).load.mockReturnValue(1);`);
+    expect(d?.targetSymbol).toBe('Svc');
+    expect(d?.method).toBe('load');
+    expect(d?.returnExpr).toBe('1');
+  });
+
+  it('reads jest.mocked(receiver).member the same way', async () => {
+    const [d] = await doubles(`${PRELUDE}jest.mocked(s).load.mockResolvedValue(1);`);
+    expect(d?.method).toBe('load');
+  });
+
+  it('still reads vi.mocked(receiver.member)', async () => {
+    const [d] = await doubles(`${PRELUDE}vi.mocked(s.load).mockReturnValue(1);`);
+    expect(d?.method).toBe('load');
+  });
+});
+
+describe('a double assigned straight onto a property', () => {
+  // `svc.method = vi.fn()` is ordinary Jest, and it produced no double at all,
+  // so neither the pinned return nor the member name was ever checked.
+  it('reads the return pinned on an assigned double', async () => {
+    const [d] = await doubles(`${PRELUDE}s.load = vi.fn().mockReturnValue(1);`);
+    expect(d?.targetSymbol).toBe('Svc');
+    expect(d?.method).toBe('load');
+    expect(d?.returnExpr).toBe('1');
+  });
+
+  it('reads the member name even when the double states nothing else', async () => {
+    // The name is itself a claim that the member exists, which is checkable
+    // whatever the fake does, so a bare `vi.fn()` still has to be recorded.
+    const [d] = await doubles(`${PRELUDE}s.loadd = vi.fn();`);
+    expect(d?.targetSymbol).toBe('Svc');
+    expect(d?.method).toBe('loadd');
+  });
+
+  it('reads a replacement signature from an assigned implementation', async () => {
+    const [d] = await doubles(`${PRELUDE}s.load = vi.fn((a: string, b: number) => 1);`);
+    expect(d?.fakeArity).toBe(2);
+  });
+
+  it('ignores an assignment that is not a double', async () => {
+    expect(await doubles(`${PRELUDE}s.load = somethingElse;`)).toEqual([]);
+  });
+
+  it('ignores an assignment onto a receiver of unknown type', async () => {
+    expect(await doubles(`const q = getThing();\nq.load = vi.fn().mockReturnValue(1);`)).toEqual(
+      [],
+    );
+  });
+});
+
+describe('marking a return written behind a type assertion', () => {
+  // The cast has to reach the analyzer: reading through it finds real drift,
+  // but it is also how a deliberate partial stub is written, and syntax cannot
+  // tell the two apart. Recording that it was there lets the analyzer say so
+  // without failing a build over an intentional partial.
+  it('flags a return written behind a cast', async () => {
+    const [d] = await doubles(
+      `${PRELUDE}vi.spyOn(s, 'load').mockResolvedValue({ id: '1' } as any);`,
+    );
+    expect(d?.returnAsserted).toBe(true);
+  });
+
+  it('leaves an uncast return unflagged', async () => {
+    const [d] = await doubles(`${PRELUDE}vi.spyOn(s, 'load').mockResolvedValue({ id: '1' });`);
+    expect(d?.returnAsserted).toBeUndefined();
+  });
+});

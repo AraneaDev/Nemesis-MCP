@@ -169,6 +169,16 @@ export interface TestDouble {
   /** The stub supplies a resolved value, so it believes the method is async. */
   resolvedReturn?: boolean;
   /**
+   * The return expression was written behind a type assertion (`as any`,
+   * `as unknown as T`, `satisfies`).
+   *
+   * Reading through the cast is what finds drift the compiler was told to
+   * ignore, but the same cast is how a deliberate partial stub is written, and
+   * syntax cannot tell the two apart. Structural findings on such a return are
+   * reported as heuristics rather than proof.
+   */
+  returnAsserted?: boolean;
+  /**
    * Parameters declared by a replacement function (`mockImplementation`,
    * `side_effect`). Unlike an asserted call, this is what the test believes
    * the signature to be rather than what it passes.
@@ -249,6 +259,14 @@ export interface ScanDiagnostic {
   file?: string;
   language?: LanguageId;
   stage: 'discovery' | 'read' | 'parse' | 'index' | 'extract' | 'fixture' | 'budget';
+  /**
+   * Where the trouble starts, when the stage can point at a line.
+   *
+   * The line is carried here rather than written into `message`, because the
+   * CLI groups skipped files by message and a line number in it would turn one
+   * counted reason into a hundred single-file lines.
+   */
+  line?: number;
   message: string;
   fatal: boolean;
 }

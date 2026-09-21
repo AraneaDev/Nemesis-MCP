@@ -37,11 +37,19 @@ function paramsOf(node: SyntaxNode): ParamSymbol[] {
       // end up inside the parameter name.
       const nameNode = field(p, 'name') ?? p.namedChildren.find((c) => c.type === 'identifier');
       const name = nameNode?.text.split(/[:=]/)[0]?.trim() ?? p.text;
+      // An annotated splat, `**kw: Any` or `*rest: Any`, parses as a typed
+      // parameter wrapping a splat pattern rather than as a splat pattern of
+      // its own. Recording it as an ordinary parameter made every keyword the
+      // function absorbs look like an argument matching nothing, and counted
+      // the splat as one slot in the arity ceiling.
+      const splat = p.namedChildren.find(
+        (c) => c.type === 'list_splat_pattern' || c.type === 'dictionary_splat_pattern',
+      );
       params.push({
-        name,
+        name: splat ? splat.text : name,
         type: typeTextOf(p, 'type'),
         hasDefault: p.type === 'default_parameter' || p.type === 'typed_default_parameter',
-        variadic: false,
+        variadic: Boolean(splat),
       });
     } else if (p.type === 'list_splat_pattern') {
       params.push({ name: p.text, type: null, hasDefault: false, variadic: true });

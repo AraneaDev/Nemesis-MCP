@@ -11,6 +11,7 @@ type SyntaxNode = import('web-tree-sitter').Node;
 
 interface SpyRecord {
   framework: string;
+  returnAsserted?: boolean;
   target: string | null;
   method: string | null;
   line: number;
@@ -171,6 +172,25 @@ function declaredTypeOf(node: SyntaxNode): string | null {
   return null;
 }
 
+/**
+ * The expression underneath any type assertions wrapping it.
+ *
+ * `mockResolvedValue({ id: '1' } as any)` used to yield the whole cast as the
+ * return expression, so the structural check saw no object literal and said
+ * nothing. `as any` is precisely what gets written when a stale mock stops
+ * compiling, which made the cast a way to switch the check off at the moment
+ * it was most needed. A double assertion nests, so this unwraps repeatedly.
+ */
+function unwrapAssertions(node: SyntaxNode | null | undefined): SyntaxNode | null {
+  let current = node ?? null;
+  while (current && (current.type === 'as_expression' || current.type === 'satisfies_expression')) {
+    const inner = current.namedChildren[0];
+    if (!inner) break;
+    current = inner;
+  }
+  return current;
+}
+
 function literalType(expr: string | null): string | null {
   if (expr === null) return null;
   const t = expr.trim();
@@ -287,18 +307,23 @@ function factoryKeys(
  * out at `vi.fn`/`jest.fn` states nothing, and null keeps it out of the
  * double list rather than producing an empty double.
  */
-function stubShapeOf(value: SyntaxNode | undefined): {
+function stubShapeOf(
+  value: SyntaxNode | undefined,
+  options?: { bareCounts?: boolean },
+): {
   fakeArity: number | null;
   fakeParamTypes?: (string | null)[];
   returnExpr: string | null;
   returnTypeHint: string | null;
   resolvedReturn?: boolean;
+  returnAsserted?: boolean;
 } | null {
   if (!value) return null;
   let node: SyntaxNode | null = value;
   let returnExpr: string | null = null;
   let returnTypeHint: string | null = null;
   let resolvedReturn = false;
+  let returnAsserted = false;
   let impl: SyntaxNode | undefined;
   let foundFn = false;
 
@@ -319,11 +344,13 @@ function stubShapeOf(value: SyntaxNode | undefined): {
       if (call.property.startsWith('mockRejectedValue')) resolvedReturn = true;
       else if (call.property.startsWith('mockResolvedValue')) {
         resolvedReturn = true;
-        returnExpr = args[0]?.text ?? null;
+        returnExpr = unwrapAssertions(args[0])?.text ?? null;
         returnTypeHint = literalType(returnExpr ?? '');
+        if (args[0] && returnExpr !== null && args[0].text !== returnExpr) returnAsserted = true;
       } else {
-        returnExpr = args[0]?.text ?? null;
+        returnExpr = unwrapAssertions(args[0])?.text ?? null;
         returnTypeHint = literalType(returnExpr ?? '');
+        if (args[0] && returnExpr !== null && args[0].text !== returnExpr) returnAsserted = true;
       }
     }
     node = field(call.fn, 'object');
@@ -341,7 +368,10 @@ function stubShapeOf(value: SyntaxNode | undefined): {
       returnTypeHint = literalType(body.text);
     }
   }
-  if (!sig && returnExpr === null && !resolvedReturn) return null;
+  // A bare `vi.fn()` states nothing about a signature or a return. As a
+  // factory value that makes it unreadable, but assigned onto a property the
+  // member name is itself a claim worth checking, so the caller decides.
+  if (!sig && returnExpr === null && !resolvedReturn && !options?.bareCounts) return null;
 
   return {
     fakeArity: sig ? sig.arity : null,
@@ -349,6 +379,7 @@ function stubShapeOf(value: SyntaxNode | undefined): {
     returnExpr,
     returnTypeHint,
     ...(resolvedReturn ? { resolvedReturn: true } : {}),
+    ...(returnAsserted ? { returnAsserted: true } : {}),
   };
 }
 
@@ -381,6 +412,7 @@ export async function extractTsDoubles(
     source,
     grammar,
     report(relFile, language, diagnostics),
+    grammar === 'javascript' ? 'tsx' : undefined,
   );
   const { root } = parsed;
 
@@ -477,6 +509,36 @@ export async function extractTsDoubles(
     }
   }
 
+  // Pass 2b: a double assigned straight onto a property (`svc.load = vi.fn()`).
+  // Ordinary Jest, and invisible until now: neither the pinned return nor the
+  // member name reached the analyzer.
+  for (const { node } of walk(root)) {
+    if (node.type !== 'assignment_expression') continue;
+    const left = field(node, 'left');
+    if (left?.type !== 'member_expression') continue;
+    const base = unwrapWrappers(field(left, 'object'));
+    const property = field(left, 'property')?.text;
+    if (base?.type !== 'identifier' || !property) continue;
+    const target = varTypes.get(base.text);
+    // Without a known receiver type there is nothing to check the name against.
+    if (!target) continue;
+    const shape = stubShapeOf(field(node, 'right') ?? undefined, { bareCounts: true });
+    if (!shape) continue;
+    spies.push({
+      framework: 'property assignment',
+      target,
+      method: property,
+      line: node.startPosition.row + 1,
+      returnTypeHint: shape.returnTypeHint,
+      returnExpr: shape.returnExpr,
+      assertedArity: null,
+      ...(shape.fakeArity !== null ? { fakeArity: shape.fakeArity } : {}),
+      ...(shape.fakeParamTypes ? { fakeParamTypes: shape.fakeParamTypes } : {}),
+      ...(shape.resolvedReturn ? { resolvedReturn: true } : {}),
+      ...(shape.returnAsserted ? { returnAsserted: true } : {}),
+    });
+  }
+
   // Pass 3: setters and assertions, attached by chain or by spy variable.
   for (const { node } of walk(root)) {
     if (node.type !== 'call_expression') continue;
@@ -516,7 +578,9 @@ export async function extractTsDoubles(
         rec.returnTypeHint = literalType(body.text);
       }
     } else if (isSetter) {
-      const expr = call.argsNode?.namedChildren[0]?.text ?? null;
+      const rawArg = call.argsNode?.namedChildren[0];
+      const expr = unwrapAssertions(rawArg)?.text ?? null;
+      if (rawArg && expr !== null && rawArg.text !== expr) rec.returnAsserted = true;
       const dt = declaredTypeOf(node);
       if (call.property.startsWith('mockRejectedValue')) {
         // The argument is the rejection reason, not a return value, but
@@ -634,6 +698,7 @@ export async function extractTsDoubles(
       returnTypeHint: rec.returnTypeHint,
       returnExpr: rec.returnExpr,
       ...(rec.resolvedReturn ? { resolvedReturn: true } : {}),
+      ...(rec.returnAsserted ? { returnAsserted: true } : {}),
       ...(rec.accessType ? { accessType: rec.accessType } : {}),
       ...(rec.returnsSelf ? { returnsSelf: true } : {}),
       ...(rec.staticReceiver !== undefined ? { staticReceiver: rec.staticReceiver } : {}),
@@ -643,6 +708,39 @@ export async function extractTsDoubles(
   }
 
   return { doubles, unread };
+}
+
+/**
+ * Strip the wrappers a configured member can be reached through: casts,
+ * parentheses, `await`, and the `expect(...)` / `vi.mocked(...)` helpers.
+ *
+ * Returns null for any other call, because descending into one would name a
+ * member of whatever it returned rather than of the receiver under test.
+ */
+function unwrapWrappers(node: SyntaxNode | null): SyntaxNode | null {
+  let current = node;
+  for (let i = 0; i < 8 && current; i++) {
+    if (
+      current.type === 'parenthesized_expression' ||
+      current.type === 'as_expression' ||
+      current.type === 'assertion_expression' ||
+      current.type === 'await_expression' ||
+      current.type === 'non_null_expression'
+    ) {
+      current = current.namedChildren[0] ?? null;
+      continue;
+    }
+    if (current.type === 'call_expression') {
+      const text = field(current, 'function')?.text ?? '';
+      if (text === 'expect' || /^(vi|jest)\.mocked$/.test(text)) {
+        current = field(current, 'arguments')?.namedChildren[0] ?? null;
+        continue;
+      }
+      return null;
+    }
+    break;
+  }
+  return current;
 }
 
 /**
@@ -665,31 +763,13 @@ function adoptTypedMember(
   // the wrong member: in `controller.currentAction.getLoop.mockReturnValue(x)`
   // the configured member is `getLoop` on whatever `currentAction` holds, not
   // `currentAction` on the controller.
-  let receiver: SyntaxNode | null = field(fn, 'object');
-  for (let i = 0; i < 8 && receiver; i++) {
-    if (
-      receiver.type === 'parenthesized_expression' ||
-      receiver.type === 'as_expression' ||
-      receiver.type === 'assertion_expression' ||
-      receiver.type === 'await_expression' ||
-      receiver.type === 'non_null_expression'
-    ) {
-      receiver = receiver.namedChildren[0] ?? null;
-      continue;
-    }
-    if (receiver.type === 'call_expression') {
-      const text = field(receiver, 'function')?.text ?? '';
-      if (text === 'expect' || /^(vi|jest)\.mocked$/.test(text)) {
-        receiver = field(receiver, 'arguments')?.namedChildren[0] ?? null;
-        continue;
-      }
-      return null;
-    }
-    break;
-  }
+  const receiver = unwrapWrappers(field(fn, 'object'));
 
   if (receiver?.type !== 'member_expression') return null;
-  const base = field(receiver, 'object');
+  // The base is unwrapped too: `vi.mocked(svc).load` wraps the receiver rather
+  // than the member, which left the base as a call expression and produced no
+  // double at all. Both spellings mean the same thing.
+  const base = unwrapWrappers(field(receiver, 'object'));
   const property = field(receiver, 'property')?.text;
   if (base?.type !== 'identifier' || !property) return null;
 

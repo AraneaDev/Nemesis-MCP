@@ -1149,3 +1149,177 @@ describe('literal union types', () => {
     expect(found[0]?.message).toBe("Argument 1 is 'z' but 'key' only accepts 'a' or 'b'.");
   });
 });
+
+describe('PHP members supplied by a used trait', () => {
+  async function run(source: string, method: string) {
+    const { analyzeDoubles } = await import('../../src/core/analyzer.js');
+    const { indexPhpFile } = await import('../../src/extractors/php/index.js');
+    const graph = emptyGraph();
+    await indexPhpFile('src/J.php', source, graph);
+    return analyzeDoubles({
+      doubles: [
+        {
+          framework: 'Mockery',
+          language: 'php',
+          file: 'tests/JTest.php',
+          line: 5,
+          targetSymbol: 'App\\Job',
+          method,
+          methods: [{ name: method, line: 6 }],
+          withArity: null,
+          assertedArity: null,
+          returnTypeHint: null,
+          returnExpr: null,
+          confidence: 'definite',
+        },
+      ],
+      graph,
+      fileLines: new Map([['tests/JTest.php', ['', '', '', '', '', '', '']]]),
+      options: { strictness: 'all' },
+    });
+  }
+
+  // Regression: the class indexer hard-coded `uses: []`, so a method reached
+  // through `use Retryable;` looked absent and was reported as a definite
+  // GHOST_METHOD. Trait-heavy framework code failed builds over correct tests.
+  const WITH_TRAIT =
+    '<?php namespace App; trait Retryable { public function retry(int $times): bool {} } class Job { use Retryable; public function run(): void {} }';
+
+  it('does not report a trait method as missing', async () => {
+    expect(await run(WITH_TRAIT, 'retry')).toEqual([]);
+  });
+
+  it('still reports a method no trait supplies', async () => {
+    const found = await run(WITH_TRAIT, 'retryy');
+    expect(found.map((f) => f.type)).toContain('GHOST_METHOD');
+  });
+});
+
+describe('nested object literal returns', () => {
+  async function run(types: string, literal: string) {
+    const { analyzeDoubles } = await import('../../src/core/analyzer.js');
+    const { indexTsFile } = await import('../../src/extractors/ts/index.js');
+    const graph = emptyGraph();
+    await indexTsFile(
+      'src/svc.ts',
+      `${types}\nexport class Svc { getOrder(): Order { return null as never; } }`,
+      graph,
+    );
+    return analyzeDoubles({
+      doubles: [
+        {
+          framework: 'vi.spyOn',
+          language: 'typescript',
+          file: 'tests/a.test.ts',
+          line: 3,
+          targetSymbol: 'Svc',
+          method: 'getOrder',
+          methods: [{ name: 'getOrder', line: 3 }],
+          withArity: null,
+          assertedArity: null,
+          returnTypeHint: null,
+          returnExpr: literal,
+          confidence: 'definite',
+        },
+      ],
+      graph,
+      fileLines: new Map([['tests/a.test.ts', ['', '', '', '']]]),
+      options: { strictness: 'all' },
+    });
+  }
+
+  // Checking only the outermost keys meant a field renamed one level down was
+  // invisible: `{ ship: { street, postcode } }` satisfied `ship: Address` on
+  // shape alone, however far the nested type had moved.
+  const TYPES =
+    'export interface Address { street: string; zip: string; }\nexport interface Order { id: string; ship: Address; }';
+
+  it('accepts a correct nested literal', async () => {
+    expect(await run(TYPES, "{ id: '1', ship: { street: 'a', zip: 'b' } }")).toEqual([]);
+  });
+
+  it('reports a required field missing from a nested literal', async () => {
+    const found = await run(TYPES, "{ id: '1', ship: { street: 'a' } }");
+    expect(found.map((f) => f.message)).toContain(
+      "Stub returns an object missing required field 'ship.zip' of Address.",
+    );
+  });
+
+  it('reports a renamed nested field under its full path', async () => {
+    const found = await run(TYPES, "{ id: '1', ship: { street: 'a', postcode: 'b' } }");
+    const unknown = found.find((f) => f.message.includes('does not exist'));
+    expect(unknown?.message).toBe(
+      "Stub returns an object with field 'ship.postcode', which does not exist on Address.",
+    );
+  });
+
+  it('suggests a near nested name', async () => {
+    // Only a name close enough to be a typo earns a did-you-mean; `postcode`
+    // for `zip` is a rename, and guessing at it would be noise.
+    const found = await run(TYPES, "{ id: '1', ship: { street: 'a', zipp: 'b' } }");
+    const unknown = found.find((f) => f.message.includes('does not exist'));
+    expect(unknown?.message).toBe(
+      "Stub returns an object with field 'ship.zipp', which does not exist on Address. Did you mean 'zip'?",
+    );
+  });
+
+  it('says nothing about a nested value that is not a literal', async () => {
+    // A variable or a call says nothing about the shape it carries.
+    expect(await run(TYPES, "{ id: '1', ship: buildAddress() }")).toEqual([]);
+  });
+});
+
+describe('structural findings on a return written behind a cast', () => {
+  async function run(literal: string, asserted: boolean) {
+    const { analyzeDoubles } = await import('../../src/core/analyzer.js');
+    const { indexTsFile } = await import('../../src/extractors/ts/index.js');
+    const graph = emptyGraph();
+    await indexTsFile(
+      'src/svc.ts',
+      'export interface User { id: string; name: string; }\nexport class Svc { getUser(): User { return null as never; } }',
+      graph,
+    );
+    return analyzeDoubles({
+      doubles: [
+        {
+          framework: 'vi.spyOn',
+          language: 'typescript',
+          file: 'tests/a.test.ts',
+          line: 3,
+          targetSymbol: 'Svc',
+          method: 'getUser',
+          methods: [{ name: 'getUser', line: 3 }],
+          withArity: null,
+          assertedArity: null,
+          returnTypeHint: null,
+          returnExpr: literal,
+          ...(asserted ? { returnAsserted: true } : {}),
+          confidence: 'definite',
+        },
+      ],
+      graph,
+      fileLines: new Map([['tests/a.test.ts', ['', '', '', '']]]),
+      options: { strictness: 'all' },
+    });
+  }
+
+  // `as unknown as T` is how a deliberate partial stub is written. The field is
+  // genuinely absent, so the finding stands, but the author overrode the
+  // compiler on purpose and that is not proof of drift. One repository carried
+  // 57 of these against a 12-field interface; as build-breaking findings they
+  // would have taught everyone to ignore the tool.
+  it('reports a missing field behind a cast as a warning', async () => {
+    // The extractor strips the cast, so the literal arrives on its own with
+    // the assertion recorded beside it.
+    const found = await run("{ id: '1' }", true);
+    const missing = found.find((f) => f.message.includes('missing required field'));
+    expect(missing?.confidence).toBe('warning');
+    expect(missing?.evidence).toBe('heuristic');
+  });
+
+  it('still reports an uncast missing field as definite', async () => {
+    const found = await run("{ id: '1' }", false);
+    const missing = found.find((f) => f.message.includes('missing required field'));
+    expect(missing?.confidence).toBe('definite');
+  });
+});
