@@ -945,6 +945,13 @@ export function inferType(expr: string, lang: string): string | null {
     return lang === 'php' ? 'array' : 'list';
   }
   if (/^\{[\s\S]*}$/.test(e) || /^dict\s*\(/.test(e)) {
+    // In Python only a brace literal with a top-level colon is a dict;
+    // `{"a", "b"}` is a set. Reading every brace literal as a dict reported a
+    // correct `set[str]` argument as drift against its own declared type.
+    if (lang === 'python' && /^\{[\s\S]*}$/.test(e)) {
+      const body = e.slice(1, -1).trim();
+      if (body !== '' && splitTopLevel(body, ':').length === 1) return 'list';
+    }
     return lang === 'php' ? 'array' : lang === 'python' ? 'dict' : 'object';
   }
   if (/^new\s+/.test(e)) {
@@ -1332,6 +1339,34 @@ export function objectLiteralKeys(expr: string): string[] | null {
   return keys;
 }
 
+/**
+ * The literal's keys paired with the text of their values.
+ *
+ * Shares every rule of `objectLiteralKeys`: a spread or a computed key makes
+ * the shape unknowable and returns null. Shorthand (`{ id }`) carries no value
+ * text, so its entry is null and nothing nested is claimed about it.
+ */
+export function objectLiteralEntries(expr: string): Map<string, string | null> | null {
+  const t = expr.trim();
+  if (!t.startsWith('{') || !t.endsWith('}')) return null;
+  const body = t.slice(1, -1);
+  const out = new Map<string, string | null>();
+  if (body.trim() === '') return out;
+  for (const part of splitTopLevel(body, ',')) {
+    if (part.startsWith('...')) return null;
+    const segments = splitTopLevel(part, ':');
+    const raw = (segments[0] ?? part).trim();
+    if (raw.startsWith('[')) return null;
+    const name = raw.replace(/^(['"`])(.*)\1$/, '$2').trim();
+    if (!/^[A-Za-z_$][\w$]*$/.test(name)) return null;
+    // A value containing its own colons (a nested literal, a ternary) split
+    // into more than two segments, so the tail is rejoined rather than sliced.
+    const value = segments.length > 1 ? segments.slice(1).join(':').trim() : null;
+    out.set(name, value);
+  }
+  return out;
+}
+
 /** The single named type an alternative resolves to, or null. */
 function nominalType(raw: string, graph: SymbolGraph, d: TestDouble): TypeSymbol | null {
   const canonical = canon(raw);
@@ -1410,23 +1445,49 @@ function structuralFieldFindings(
     return [];
   }
 
-  const present = new Set(keys);
+  void lang;
+  return compareFields(d, m, owner, type, d.returnExpr ?? '', '', graph, new Set([type.name]));
+}
+
+/**
+ * Compare one object literal against one type, then walk into the members that
+ * are themselves literals of a known type.
+ *
+ * `path` prefixes a nested field with the route taken to reach it, so a
+ * finding names `ship.zip` rather than a bare `zip` that could be any of
+ * several members. `seen` stops a self-referential type recursing forever.
+ */
+function compareFields(
+  d: TestDouble,
+  m: { name: string; line: number },
+  owner: TypeSymbol,
+  type: TypeSymbol,
+  literal: string,
+  path: string,
+  graph: SymbolGraph,
+  seen: Set<string>,
+): Finding[] {
+  const entries = objectLiteralEntries(literal);
+  if (entries === null || !type.fields) return [];
   const findings: Finding[] = [];
   for (const [name, meta] of type.fields) {
-    if (meta.required && !present.has(name)) {
+    if (meta.required && !entries.has(name)) {
+      // A cast over the literal is the author overriding the compiler on
+      // purpose, which is also how a deliberate partial stub is written. The
+      // field really is absent, so the finding stands, but not as proof.
       findings.push({
         file: d.file,
         line: m.line,
         type: 'RETURN_DRIFT',
-        confidence: 'definite',
-        evidence: 'typed',
+        confidence: d.returnAsserted ? 'warning' : 'definite',
+        evidence: d.returnAsserted ? 'heuristic' : 'typed',
         double_type: d.framework,
         target: `${owner.name}::${m.name}`,
-        message: `Stub returns an object missing required field '${name}' of ${type.name}.`,
+        message: `Stub returns an object missing required field '${path}${name}' of ${type.name}.`,
       });
     }
   }
-  for (const key of keys) {
+  for (const [key, value] of entries) {
     if (!type.fields.has(key)) {
       const suggestion = nearestField(type, key);
       findings.push({
@@ -1437,12 +1498,35 @@ function structuralFieldFindings(
         evidence: 'heuristic',
         double_type: d.framework,
         target: `${owner.name}::${m.name}`,
-        message: `Stub returns an object with field '${key}', which does not exist on ${type.name}.${suggestion ? ` Did you mean '${suggestion}'?` : ''}`,
+        message: `Stub returns an object with field '${path}${key}', which does not exist on ${type.name}.${suggestion ? ` Did you mean '${suggestion}'?` : ''}`,
         ...(suggestion ? { suggestion } : {}),
       });
+      continue;
     }
+    // Only a literal value says anything about a nested shape. A variable or a
+    // call could carry any object, so there is nothing to compare.
+    if (value === null || !value.trim().startsWith('{')) continue;
+    const declaredField = type.fields.get(key)?.type;
+    if (!declaredField) continue;
+    const alts = alternatives(declaredField);
+    if (alts.length !== 1) continue;
+    const nested = nominalType(alts[0] ?? '', graph, d);
+    if (!nested?.fields || nested.fields.size === 0) continue;
+    if (seen.has(nested.name)) continue;
+    if (hasUnresolvedAncestor(graph, nested, { language: d.language, fromFile: d.file })) continue;
+    findings.push(
+      ...compareFields(
+        d,
+        m,
+        owner,
+        nested,
+        value,
+        `${path}${key}.`,
+        graph,
+        new Set([...seen, nested.name]),
+      ),
+    );
   }
-  void lang;
   return findings;
 }
 

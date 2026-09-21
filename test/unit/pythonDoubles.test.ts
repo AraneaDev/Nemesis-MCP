@@ -371,3 +371,284 @@ describe('a patch target reaching through a module attribute', () => {
     expect(s.unknowable).toBe(0);
   });
 });
+
+describe('return_value set through a patcher handle', () => {
+  // Only `patch(..., return_value=x)` and a `spec=` mock's attribute were ever
+  // connected to a target. The three handle forms below are the common way to
+  // write this, and each produced a counted double that was never checked.
+  it('binds a with-statement alias', async () => {
+    // The patcher call is a double in its own right, so the one under test is
+    // the double carrying the return pinned through the alias.
+    const found = await configured(
+      `from unittest.mock import patch\ndef t():\n    with patch.object(Feed, 'count') as m:\n        m.return_value = 'wrong'`,
+    );
+    const pinned = found.find((x) => x.returnExpr === "'wrong'");
+    expect(pinned?.targetSymbol).toBe('Feed');
+    expect(pinned?.method).toBe('count');
+  });
+
+  it('binds a dotted patch through a with-statement alias', async () => {
+    const [d] = await configured(
+      `from unittest.mock import patch\ndef t():\n    with patch('src.svc.Client.login') as m:\n        m.return_value = 1`,
+    );
+    // The patch call already yields a double, so the return pinned through the
+    // alias is what this is actually about.
+    expect(d?.targetSymbol).toBe('src.svc.Client');
+    const pinned = (
+      await configured(
+        `from unittest.mock import patch\ndef t():\n    with patch('src.svc.Client.login') as m:\n        m.return_value = 1`,
+      )
+    ).find((x) => x.returnExpr === '1');
+    expect(pinned?.method).toBe('login');
+  });
+
+  it('binds a plain assignment of patch.object', async () => {
+    const found = await configured(
+      `from unittest.mock import patch\ndef t():\n    m = patch.object(Feed, 'count')\n    m.return_value = 'wrong'`,
+    );
+    const pinned = found.find((x) => x.returnExpr === "'wrong'");
+    expect(pinned?.targetSymbol).toBe('Feed');
+    expect(pinned?.method).toBe('count');
+  });
+
+  it('binds a decorator to the parameter it injects', async () => {
+    const found = await configured(
+      `from unittest.mock import patch\n@patch.object(Feed, 'count')\ndef test_it(mock_count):\n    mock_count.return_value = 'wrong'`,
+    );
+    const pinned = found.find((x) => x.returnExpr === "'wrong'");
+    expect(pinned?.targetSymbol).toBe('Feed');
+    expect(pinned?.method).toBe('count');
+  });
+
+  it('binds stacked decorators bottom-up, the way unittest.mock injects them', async () => {
+    // The decorator nearest the function supplies the first parameter.
+    const found = await configured(
+      `from unittest.mock import patch\n@patch.object(Feed, 'top')\n@patch.object(Feed, 'bottom')\ndef test_it(mock_bottom, mock_top):\n    mock_bottom.return_value = 1\n    mock_top.return_value = 2`,
+    );
+    const byMethod = new Map(found.map((d) => [d.method, d.returnExpr]));
+    expect(byMethod.get('bottom')).toBe('1');
+    expect(byMethod.get('top')).toBe('2');
+  });
+});
+
+describe('a patcher and its handle are one double', () => {
+  // The patch call and the `return_value` set through its handle describe the
+  // same stub. Emitting both reported every finding about it twice, once per
+  // line, which reads as two separate problems.
+  it('enriches the patcher rather than adding a second double', async () => {
+    const found = (
+      await configured(
+        `from unittest.mock import patch\ndef t():\n    with patch.object(Feed, 'count') as m:\n        m.return_value = 'wrong'`,
+      )
+    ).filter((d) => d.targetSymbol === 'Feed' && d.method === 'count');
+    expect(found).toHaveLength(1);
+    expect(found[0]?.returnExpr).toBe("'wrong'");
+  });
+
+  it('still records a member configured on a spec mock separately', async () => {
+    // `MagicMock(spec=Feed)` names no member, so the attribute really is the
+    // only thing naming one and has to stay its own double.
+    const found = await configured(
+      `from unittest.mock import MagicMock\ndef t():\n    f = MagicMock(spec=Feed)\n    f.count.return_value = 'wrong'`,
+    );
+    expect(found.filter((d) => d.method === 'count')).toHaveLength(1);
+  });
+});
+
+describe('attributes of a patched module-level object', () => {
+  // `patch("svc.user_repo")` replaces an object that lives in the module, so
+  // `handle.get_by_username` configures a member of THAT object, whose type
+  // nothing here knows. Reading it as a member of the module claimed the
+  // module had the method, which produced 397 false GHOST_METHODs across one
+  // repository's test suite.
+  it('says nothing about a member reached through a patched attribute', async () => {
+    const found = await configured(
+      `from unittest.mock import patch\ndef t():\n    with patch('svc.auth.user_repo') as repo:\n        repo.get_by_username.return_value = None`,
+    );
+    expect(found.map((d) => d.method)).not.toContain('get_by_username');
+  });
+
+  it('says nothing for a dotted patch either, class or object alike', async () => {
+    // `patch('svc.auth.Client')` and `patch('svc.auth.user_repo')` are the same
+    // syntax. Nothing here can tell a class from an instance, so reading the
+    // attribute as a member of one or the other is a guess.
+    const found = await configured(
+      `from unittest.mock import patch\ndef t():\n    with patch('svc.auth.Client') as c:\n        c.login.return_value = None`,
+    );
+    expect(found.map((d) => d.method)).not.toContain('login');
+  });
+
+  it('still reads a member of a class named as an identifier', async () => {
+    // `patch.object(Client)` names the class outright, so the attribute really
+    // is its member and the comparison is sound.
+    const found = await configured(
+      `from unittest.mock import patch\ndef t():\n    with patch.object(Client) as c:\n        c.login.return_value = None`,
+    );
+    const pinned = found.find((d) => d.method === 'login');
+    expect(pinned?.targetSymbol).toBe('Client');
+  });
+
+  it('still pins the return of the patched member itself', async () => {
+    const found = await configured(
+      `from unittest.mock import patch\ndef t():\n    with patch('svc.auth.get_user') as g:\n        g.return_value = None`,
+    );
+    const pinned = found.find((d) => d.returnExpr === 'None');
+    expect(pinned?.method).toBe('get_user');
+  });
+});
+
+describe('annotated star parameters', () => {
+  // `**kw: Any` parses as a typed parameter rather than a dictionary splat,
+  // and that branch recorded it as an ordinary parameter. Every keyword the
+  // function absorbs then looked like an argument matching no parameter, and
+  // the arity ceiling counted the splat as one slot.
+  async function run(signature: string, assertion: string) {
+    const graph = emptyGraph();
+    await indexPythonFile(
+      'src/runner.py',
+      `from typing import Any\n\n${signature}\n    return ""\n`,
+      graph,
+    );
+    const src = `from unittest.mock import patch\ndef t():\n    with patch('src.runner.run_decoded') as m:\n        pass\n    ${assertion}`;
+    const ds = await extractPythonDoubles('tests/test_runner.py', src);
+    return analyzeDoubles({
+      doubles: ds,
+      graph,
+      fileLines: new Map([['tests/test_runner.py', src.split('\n')]]),
+      options: { strictness: 'all' },
+    });
+  }
+
+  it('lets an annotated **kwargs absorb any keyword', async () => {
+    const found = await run(
+      'def run_decoded(cmd: list[str], **kw: Any) -> str:',
+      "m.assert_called_once_with(['git'], as_user=None, timeout=5)",
+    );
+    expect(found.map((f) => f.message)).toEqual([]);
+  });
+
+  it('lets an annotated *args absorb extra positionals', async () => {
+    const found = await run(
+      'def run_decoded(cmd: list[str], *rest: Any) -> str:',
+      "m.assert_called_once_with(['git'], 'a', 'b', 'c')",
+    );
+    expect(found.map((f) => f.message)).toEqual([]);
+  });
+
+  it('still reports a keyword no parameter absorbs', async () => {
+    const found = await run(
+      'def run_decoded(cmd: list[str], timeout: int = 5) -> str:',
+      "m.assert_called_once_with(['git'], timeuot=5)",
+    );
+    expect(found.map((f) => f.type)).toContain('ARITY_MISMATCH');
+  });
+});
+
+describe('a name rebound later in the file', () => {
+  // The variable map is one flat, scope-blind pass, so `m` in one test
+  // function is the same key as `m` in the next. Binding with-aliases made
+  // that collide: a `with patch.object(...) as m` in an earlier test kept
+  // winning over a later `m = Mock(spec=...)`, and the member configured on
+  // the spec mock stopped being checked.
+  it('lets a later spec mock replace an earlier patcher binding', async () => {
+    const found = await configured(
+      `from unittest.mock import patch, Mock\nfrom repo import Repo\n\ndef test_save():\n    with patch.object(Repo, 'save2') as m:\n        pass\n\ndef test_price():\n    m = Mock(spec=Repo)\n    m.price.return_value = 'nope'`,
+    );
+    const pinned = found.find((d) => d.returnExpr === "'nope'");
+    expect(pinned?.targetSymbol).toBe('Repo');
+    expect(pinned?.method).toBe('price');
+  });
+
+  it('lets a later patcher replace an earlier spec mock binding', async () => {
+    const found = await configured(
+      `from unittest.mock import patch, Mock\n\ndef test_a():\n    m = Mock(spec=Repo)\n    m.price.return_value = 1\n\ndef test_b():\n    with patch.object(Repo, 'count') as m:\n        m.return_value = 2`,
+    );
+    const pinned = found.find((d) => d.returnExpr === '2');
+    expect(pinned?.method).toBe('count');
+  });
+});
+
+describe('assertions reached through a patched attribute', () => {
+  // The same rule as for `return_value`: `patch("mod.singleton")` replaces an
+  // object living in the module, so `handle.method.assert_called_with(...)`
+  // asserts on a member of THAT object. Reading it as a member of the module
+  // is a guess, and it was the shape of ten of the twelve false positives a
+  // sweep of one repository produced.
+  it('says nothing when the assertion reaches past the patched name', async () => {
+    const found = await configured(
+      `from unittest.mock import patch\ndef t():\n    with patch('core.apache.apache_manager.apache_manager') as m:\n        pass\n    m.disable_site.assert_called_once_with('x')`,
+    );
+    expect(found.map((d) => d.method)).not.toContain('disable_site');
+  });
+
+  it('still asserts on the patched member itself', async () => {
+    const found = await configured(
+      `from unittest.mock import patch\ndef t():\n    with patch('svc.auth.get_user') as m:\n        pass\n    m.assert_called_once_with('x')`,
+    );
+    const asserted = found.find((d) => d.assertedArity === 1);
+    expect(asserted?.method).toBe('get_user');
+  });
+
+  it('still asserts on a member of a spec mock', async () => {
+    const found = await configured(
+      `from unittest.mock import MagicMock\ndef t():\n    m = MagicMock(spec=Client)\n    m.login.assert_called_once_with('x')`,
+    );
+    const asserted = found.find((d) => d.assertedArity === 1);
+    expect(asserted?.method).toBe('login');
+    expect(asserted?.targetSymbol).toBe('Client');
+  });
+});
+
+describe('decorator-injected parameters', () => {
+  // unittest.mock injects after `self`, and a parameter only exists inside its
+  // own function. Counting from slot 0 bound the patcher to `self`, and a flat
+  // map let `mock_verify` in one test method carry the patcher from another,
+  // which named a real method of a real module with total confidence.
+  it('skips self when mapping decorators onto parameters', async () => {
+    const found = await configured(
+      `from unittest.mock import patch\nclass TestIt:\n    @patch.object(Feed, 'count')\n    def test_a(self, mock_count):\n        mock_count.return_value = 'wrong'`,
+    );
+    const pinned = found.find((d) => d.returnExpr === "'wrong'");
+    expect(pinned?.targetSymbol).toBe('Feed');
+    expect(pinned?.method).toBe('count');
+  });
+
+  it('skips cls on a classmethod test', async () => {
+    const found = await configured(
+      `from unittest.mock import patch\nclass TestIt:\n    @classmethod\n    @patch.object(Feed, 'count')\n    def test_a(cls, mock_count):\n        mock_count.return_value = 'wrong'`,
+    );
+    expect(found.find((d) => d.returnExpr === "'wrong'")?.method).toBe('count');
+  });
+
+  it('does not let a parameter binding escape its own function', async () => {
+    const found = await configured(
+      `from unittest.mock import patch\nclass TestIt:\n    @patch.object(Feed, 'count')\n    def test_a(self, mock_it):\n        pass\n\n    def test_b(self, mock_it):\n        mock_it.return_value = 'elsewhere'`,
+    );
+    expect(found.find((d) => d.returnExpr === "'elsewhere'")).toBeUndefined();
+  });
+});
+
+describe('python brace literals', () => {
+  // `{"a", "b"}` is a set; only `{"a": 1}` is a dict. Reading every brace
+  // literal as a dict reported a correct `set[str]` argument as drift.
+  async function argCheck(signature: string, call: string) {
+    const graph = emptyGraph();
+    await indexPythonFile('src/m.py', `${signature}\n    return 0\n`, graph);
+    const src = `from unittest.mock import patch\ndef t():\n    with patch('src.m.f') as m:\n        pass\n    m.assert_called_once_with(${call})`;
+    const ds = await extractPythonDoubles('tests/test_m.py', src);
+    return analyzeDoubles({
+      doubles: ds,
+      graph,
+      fileLines: new Map([['tests/test_m.py', src.split('\n')]]),
+      options: { strictness: 'all' },
+    });
+  }
+
+  it('accepts a set literal for a set parameter', async () => {
+    expect(await argCheck('def f(known: set[str]) -> int:', `{"a", "b"}`)).toEqual([]);
+  });
+
+  it('accepts a dict literal for a dict parameter', async () => {
+    expect(await argCheck('def f(known: dict[str, int]) -> int:', `{"a": 1}`)).toEqual([]);
+  });
+});

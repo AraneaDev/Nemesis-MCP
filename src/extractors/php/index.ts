@@ -158,6 +158,28 @@ function heritageNames(decl: SyntaxNode, clauseTypes: string[], header: PhpHeade
   return out;
 }
 
+/**
+ * The traits a class body pulls in with `use Retryable;`.
+ *
+ * Only the `use_declaration`'s own `name` children count. A conflict-resolution
+ * block (`use A, B { A::m insteadof B; }`) nests further names under a
+ * `use_list`, and those name methods rather than traits.
+ */
+function traitNames(decl: SyntaxNode, header: PhpHeader): string[] {
+  const body = decl.namedChildren.find((c) => c.type === 'declaration_list');
+  if (!body) return [];
+  const out: string[] = [];
+  for (const child of body.namedChildren) {
+    if (child.type !== 'use_declaration') continue;
+    for (const c of child.namedChildren) {
+      if (c.type === 'name' || c.type === 'qualified_name') {
+        out.push(qualifyName(c.text, header));
+      }
+    }
+  }
+  return out;
+}
+
 export async function indexPhpFile(
   relFile: string,
   source: string,
@@ -181,7 +203,7 @@ export async function indexPhpFile(
         ...(fieldsOfBody(node) ? { fields: fieldsOfBody(node)! } : {}),
         extends: heritageNames(node, ['base_clause'], header),
         implements: heritageNames(node, ['class_interface_clause'], header),
-        uses: [],
+        uses: traitNames(node, header),
         line: node.startPosition.row + 1,
         ...(modifiersOf(node).length > 0 ? { modifiers: modifiersOf(node) } : {}),
       };
@@ -213,7 +235,7 @@ export async function indexPhpFile(
         unknownMembers: new Set(),
         extends: [],
         implements: [],
-        uses: [],
+        uses: traitNames(node, header),
         line: node.startPosition.row + 1,
       };
       addType(graph, sym);
@@ -231,7 +253,7 @@ export async function indexPhpFile(
         unknownMembers: new Set(),
         extends: [],
         implements: heritageNames(node, ['interface_list'], header),
-        uses: [],
+        uses: traitNames(node, header),
         line: node.startPosition.row + 1,
       };
       addType(graph, sym);
