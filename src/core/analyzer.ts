@@ -1248,6 +1248,21 @@ export interface AnalyzeInput {
   stats?: import('./types.js').AnalyzeStats;
 }
 
+/**
+ * A replacement that builds its own promise hands back a promise, exactly as
+ * `mockResolvedValue` does, with a resolved value nothing here can see.
+ *
+ * `new Promise((resolve) => setTimeout(resolve, 100))` is how a test delays an
+ * async method. Read as a return value it became the nominal type `Promise`,
+ * while the declared `Promise<void>` was unwrapped to `void`, and the two were
+ * reported as definite drift. Treated as a resolved return instead, it is
+ * checked for what it does assert: that the method is awaitable.
+ */
+function asResolvedIfConstructedPromise(d: TestDouble): TestDouble {
+  if (!d.returnExpr || !/^new\s+Promise\s*[(<]/.test(d.returnExpr.trim())) return d;
+  return { ...d, returnExpr: null, returnTypeHint: null, resolvedReturn: true };
+}
+
 export function analyzeDoubles(input: AnalyzeInput): Finding[] {
   const findings: Finding[] = [];
   const reportedFinalTargets = new Set<string>();
@@ -1261,7 +1276,8 @@ export function analyzeDoubles(input: AnalyzeInput): Finding[] {
   }
   findings.push(...manualMockFindings(input.graph));
   const stats = input.stats;
-  for (const d of input.doubles) {
+  for (const raw of input.doubles) {
+    const d = asResolvedIfConstructedPromise(raw);
     const lines = input.fileLines.get(d.file) ?? [];
     if (stats) countDouble(d, input.graph, stats, lines, symbolsByFile);
     findings.push(...classify(d, input.graph, lines, reportedFinalTargets, symbolsByFile));

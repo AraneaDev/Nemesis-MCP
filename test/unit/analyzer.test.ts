@@ -1323,3 +1323,52 @@ describe('structural findings on a return written behind a cast', () => {
     expect(missing?.confidence).toBe('definite');
   });
 });
+
+describe('a replacement that builds its own promise', () => {
+  async function run(signature: string, returnExpr: string) {
+    const { analyzeDoubles } = await import('../../src/core/analyzer.js');
+    const { indexTsFile } = await import('../../src/extractors/ts/index.js');
+    const graph = emptyGraph();
+    await indexTsFile('src/auth.ts', `export class AuthService { ${signature} }`, graph);
+    return analyzeDoubles({
+      doubles: [
+        {
+          framework: 'vi.mocked',
+          language: 'typescript',
+          file: 'tests/a.test.ts',
+          line: 3,
+          targetSymbol: 'AuthService',
+          method: 'logout',
+          methods: [{ name: 'logout', line: 3 }],
+          withArity: null,
+          assertedArity: null,
+          returnTypeHint: null,
+          returnExpr,
+          confidence: 'definite',
+        },
+      ],
+      graph,
+      fileLines: new Map([['tests/a.test.ts', ['', '', '', '']]]),
+      options: { strictness: 'all' },
+    });
+  }
+
+  // `new Promise((resolve) => setTimeout(resolve, 100))` is how a test delays
+  // an async method. The declared `Promise<void>` was unwrapped to `void` while
+  // the stub stayed `Promise`, and the two were reported as definite drift.
+  it('accepts a constructed promise for an async method', async () => {
+    const found = await run(
+      'async logout(): Promise<void> {}',
+      'new Promise((resolve) => setTimeout(resolve, 100))',
+    );
+    expect(found).toEqual([]);
+  });
+
+  it('still reports a constructed promise for a method that is not async', async () => {
+    const found = await run(
+      "logout(): string { return ''; }",
+      'new Promise((resolve) => setTimeout(resolve, 100))',
+    );
+    expect(found.map((f) => f.type)).toContain('RETURN_DRIFT');
+  });
+});
