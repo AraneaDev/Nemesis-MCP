@@ -1,6 +1,6 @@
 {
   "name": "nemesis-mcp",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Static contract-integrity inspection between test doubles and production code, exposed as MCP tools + CLI.",
   "type": "module",
   "license": "MIT",

@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.4.0](https://github.com/AraneaDev/Nemesis-MCP/compare/v0.3.0...v0.4.0) (2026-09-21)
+
+
+### Features
+
+* close the detection gaps a corpus sweep found ([dffac5f](https://github.com/AraneaDev/Nemesis-MCP/commit/dffac5f558d1255d1e351e90ef7f0321d0fe1648))
+* separate a file read with a gap from a file not read at all ([569f3e4](https://github.com/AraneaDev/Nemesis-MCP/commit/569f3e4fa6e00016de33770fae50d0cfae4b76d3))
+
+
+### Fixes
+
+* address the review of the detection work ([3de3dfc](https://github.com/AraneaDev/Nemesis-MCP/commit/3de3dfcf7156e6290fd0aaa1b71e508adbe816bb))
+* list the members of a trait redeclared in a Rust test ([0e368c3](https://github.com/AraneaDev/Nemesis-MCP/commit/0e368c3fcd1009cdf5616c7002ce6e0ae660840f))
+* pick the right records out of a fixture, and judge only what is decidable ([32d0625](https://github.com/AraneaDev/Nemesis-MCP/commit/32d0625bd7079f1a917cbeeedd524e4c5c919373))
+* read a replacement that builds its own promise as a resolved return ([da25047](https://github.com/AraneaDev/Nemesis-MCP/commit/da25047b1d5b7c31c99a9cc3e60782360564aeeb))
+* read JSX in a JavaScript file, and say what a parse error costs ([1630f7f](https://github.com/AraneaDev/Nemesis-MCP/commit/1630f7f664403802470ebb65d9f28415da5e8c80))
+* resolve an absolute scan path against the scan root ([3c8e6a1](https://github.com/AraneaDev/Nemesis-MCP/commit/3c8e6a1eb022ae8a8d9e893601ea8abc82276497))
+
 ## [0.3.0](https://github.com/AraneaDev/Nemesis-MCP/compare/v0.2.5...v0.3.0) (2026-09-20)
 
 
