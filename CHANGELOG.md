@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/AraneaDev/Nemesis-MCP/compare/v0.4.0...v0.4.1) (2026-11-04)
+
+
+### Fixes
+
+* stop reporting valid TypeScript the grammar cannot read as a parse error ([5718e28](https://github.com/AraneaDev/Nemesis-MCP/commit/5718e289bf7a1b88765c6a4d604dfa2a32cc7725)), closes [#29](https://github.com/AraneaDev/Nemesis-MCP/issues/29)
+
 ## [0.4.0](https://github.com/AraneaDev/Nemesis-MCP/compare/v0.3.0...v0.4.0) (2026-09-21)
 
 
