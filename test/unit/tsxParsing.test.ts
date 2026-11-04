@@ -69,11 +69,11 @@ describe('a .tsx file', () => {
 // rest of the file. Until this was recorded, such a file was indistinguishable
 // from one with nothing wrong in it, and the summary said the audit was clean.
 describe('a file the parser cannot read', () => {
-  // `importOriginal<typeof import('./x')>()` is the documented way to type
-  // Vitest's importOriginal, and the grammar cannot parse it.
+  // A spread with nothing to spread is a syntax error to every compiler, so
+  // this stays unreadable whatever the grammar learns to accept.
   const UNREADABLE = [
-    `vi.mock('../api', async (importOriginal) => ({`,
-    `  ...(await importOriginal<typeof import('../api')>()),`,
+    `vi.mock('../api', async () => ({`,
+    `  ...,`,
     `  getUser: vi.fn(),`,
     `}));`,
   ].join('\n');
@@ -178,17 +178,94 @@ describe('JSX in a .js or .jsx file', () => {
   });
 
   it('still reports a file no grammar can read', async () => {
-    // A bare `&` in JSX text defeats both grammars, so the fallback must not
-    // turn an unreadable file into a silently clean one.
+    // A `}` in JSX text is an error to every compiler and defeats both
+    // grammars, so the fallback must not turn an unreadable file into a
+    // silently clean one.
     const diagnostics: ScanDiagnostic[] = [];
     await indexTsFile(
       'src/Bad.jsx',
-      `export const A = () => <p>a & b</p>;`,
+      `export const A = () => <p>a } b</p>;`,
       {
         ...emptyGraph(),
       },
       diagnostics,
     );
     expect(diagnostics.map((d) => d.stage)).toEqual(['parse']);
+  });
+});
+
+// Two things TypeScript compiles that the bundled grammars cannot read, and
+// neither can the upstream ones: `import('./x')` used as a type inside type
+// arguments or an annotation, and a bare `&` in JSX text. The first is how the
+// Vitest documentation types `importOriginal`. On one repository they made 21
+// of 22 degraded files, and a summary that always lists them hides the file
+// that really could not be read.
+describe('valid TypeScript the grammar cannot read', () => {
+  async function diagnose(file: string, src: string) {
+    const diagnostics: ScanDiagnostic[] = [];
+    await indexTsFile(file, src, emptyGraph(), diagnostics);
+    return diagnostics;
+  }
+
+  it('records nothing for importOriginal typed with typeof import', async () => {
+    const src = [
+      `import { it, expect, vi } from 'vitest';`,
+      `import { FLAG } from './flags';`,
+      `vi.mock('./flags', async (importOriginal) => ({`,
+      `  ...(await importOriginal<typeof import('./flags')>()),`,
+      `  NOT_THERE: true,`,
+      `}));`,
+      `it('x', () => { expect(FLAG).toBe(false); });`,
+    ].join('\n');
+    const diagnostics: ScanDiagnostic[] = [];
+    const { doubles } = await extractTsDoubles('src/a.test.ts', src, 'typescript', diagnostics);
+    expect(diagnostics).toEqual([]);
+    // The factory's keys are still read, so a ghost key is still caught.
+    expect(doubles[0]?.methods?.map((m) => m.name)).toEqual(['NOT_THERE']);
+  });
+
+  it('records nothing for an import type in a type argument', async () => {
+    expect(await diagnose('src/b.ts', `const v = f<import('./flags').Foo>();\n`)).toEqual([]);
+  });
+
+  it('records nothing for an import type inside a return type', async () => {
+    const src = [
+      `export function list(): Promise<{ items: import('../types').Item[]; total: number }> {`,
+      `  return fetchAll();`,
+      `}`,
+    ].join('\n');
+    expect(await diagnose('src/c.ts', src)).toEqual([]);
+  });
+
+  it('records nothing for & in JSX text, in .tsx and .jsx', async () => {
+    const src = `export function View() {\n  return <h2>Orders & Pipeline</h2>;\n}\n`;
+    expect(await diagnose('src/View.tsx', src)).toEqual([]);
+    expect(await diagnose('src/View.jsx', src)).toEqual([]);
+  });
+
+  it('still reports a real error, on its own line rather than the import type', async () => {
+    const src = [
+      `vi.mock('./flags', async (importOriginal) => ({`,
+      `  ...(await importOriginal<typeof import('./flags')>()),`,
+      `}));`,
+      `const broken = ;`,
+    ].join('\n');
+    const diagnostics = await diagnose('src/d.test.ts', src);
+    expect(diagnostics.map((d) => d.line)).toEqual([4]);
+  });
+
+  it('still reports a real error in JSX alongside a bare &', async () => {
+    const src = `export const A = () => <p>a & b } c</p>;\n`;
+    const diagnostics = await diagnose('src/E.tsx', src);
+    expect(diagnostics.map((d) => d.stage)).toEqual(['parse']);
+  });
+
+  it('extracts from the source as written, not a rewritten copy', async () => {
+    const src = `const m = await import('./mod');\nconst t = f<typeof import('./mod')>();\n`;
+    const parsed = await parseSource('typescript', src, 'typescript', {
+      file: 'src/f.ts',
+      diagnostics: [],
+    });
+    expect(parsed.root.text).toBe(src);
   });
 });
