@@ -200,4 +200,4 @@ and each one is expected to produce exactly the findings its README comment desc
 ---
 
 Built by [Tim Schipper](https://tim-schipper.nl/en) and released as open source under
-[Aranea Development](https://aranea-development.nl).
+[aranea.dev](https://aranea.dev).
